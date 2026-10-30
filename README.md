@@ -195,6 +195,24 @@ lib/config.js      StandardSchemaV1 配置校验
 lib/index.js       插件入口：pre-execute 门禁 + resource_guard 工具
 scripts/launch.mjs 启动壳 CLI
 scripts/launcher.mjs 启动壳实现（Job 整树硬顶）
-scripts/verify-*.mjs 真机验收
+scripts/verify-*.mjs 真机验收（可逆性 / Job 内核语义 / 启动壳 / 真 profile）
+scripts/verify-deny-probe.js 只在 .verify profile 里挂载的探针
+scripts/probe-*.cjs 一次性诊断探针（错误码、偏移量），留着是因为它们是那些教训的证据
 test/              48 条测试
 ```
+
+## 一个必须改的地方：重活名单
+
+默认名单是 `pwsh / bash / shell / workflow / subagent / subagent_fork / send_message / web_fetch / web_search / job_*`。
+判断标准是「会不会拉子进程或扇出并发」。如果你的常用流程里有某个被误伤，在 patch 里覆盖：
+
+```yaml
+- id: resource-guard
+  name: 'dsh-resource-guard'
+  config:
+    heavyTools: ['pwsh', 'bash']
+    heavyPatterns: []
+```
+
+注意 `interrupt_agent` **故意不在名单里** —— 压力大时取消子代理是降压动作，不该被拦。
+
