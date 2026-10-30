@@ -10,16 +10,25 @@
       "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
     },
+    "./client": {
+      "types": "./lib/types/client.d.ts",
+      "default": "./lib/client.js"
+    },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "files": [
     "lib/index.js",
+    "lib/client.js",
     "lib/pressure.js",
     "lib/guardian.js",
     "lib/win32.js",
     "lib/config.js",
+    "lib/tree-stats.js",
+    "lib/host-api.js",
+    "lib/gc.js",
     "lib/types/**/*.d.ts",
+    "client/source.js",
     "cordis.patch.yml",
     "scripts",
     "dsh-guarded.cmd",
@@ -42,14 +51,25 @@
     "@deepseek-ai/cordis": "^4.0.5"
   },
   "scripts": {
+    "build:client": "node scripts/build-client.mjs",
     "test": "node --test \"test/*.test.mjs\"",
     "verify": "node scripts/verify-reversible.mjs && node scripts/verify-cap.mjs && node scripts/verify-launcher-job.mjs",
     "verify:profile": "node scripts/verify-profile.mjs",
+    "verify:pill": "node scripts/verify-desktop-pill.mjs",
     "launch": "node scripts/launch.mjs"
   },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-modules"
+      ],
+      "platform": "web"
     },
     "manifestVersion": 1
   }

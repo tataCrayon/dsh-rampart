@@ -9,6 +9,9 @@
 | **插件**（软） | 采样可用内存 → 分 normal/warn/critical → 降优先级、钉核、拦重活、给模型读数据 | `lib/` |
 | **启动壳**（硬） | 给整棵 Electron 进程树套 Job Object 内存硬顶，撞上就被系统拒绝 | `scripts/launch.mjs` |
 
+外加**输入框下方的一条读数**（`CPU 12% · DSH 1.2 GB`），点开是 IDEA 式的详情面板，
+带一个「释放内存」按钮。数据不走模型，是浏览器直接打宿主路由取的本机读数。
+
 ---
 
 ## 为什么要自己写
@@ -96,6 +99,8 @@ node scripts\launch.mjs --cap 12000 --low-priority
 | `limitCores` | 0 | 钉住核数；0 = 不动亲和性 |
 | `heavyTools` | pwsh/bash/shell/workflow/subagent/subagent_fork/send_message/web_fetch/web_search | 精确名单 |
 | `heavyPatterns` | `['job_*']` | 通配名单 |
+| `showStatusPill` | `true` | 是否挂输入框下方的读数条 + `/resource-guard/api/*` 路由 |
+| `statusPillIntervalMs` | 2000 | 读数条轮询间隔；低于 500 会被夹到 500 |
 
 **为什么默认值这么保守**：本机实测物理 32 GB、可用长期 2.7~3.3 GB（约 9%），提交内存同量级。
 误拦一条重活只是慢一点；漏拦一次重活是整机卡死。所以宁可早拦。
@@ -136,6 +141,57 @@ node scripts\launch.mjs --cap 12000 --low-priority
 
 ---
 
+## 底栏读数条（IDEA 那套）
+
+输入框下面，跟着 DSH 自己的 `154 tok/s`、`缓存命中 49%` 并排放一条：
+
+```
+CPU 12% · DSH 1.2 GB
+```
+
+- **normal** → 灰色（与内置统计条同一个 tertiary 前景色）
+- **warn** → 变警示色
+- **critical** → 前置一个实心点 + 警示色
+
+点开是面板：整机可用物理/提交、整机 CPU、DSH 进程树（进程数 + 提交量 + CPU 占比）、
+已拦/降速计数、本进程 JS 堆，以及一个 **「释放内存」** 按钮。
+
+### 两个数分别是什么
+
+| 显示 | 来源 | 含义 |
+|---|---|---|
+| `CPU 12%` | 宿主 `GetSystemTimes` 差值 ÷ (经过时间 × 核数) | 整机 CPU 占用，不是单核 |
+| `DSH 1.2 GB` | 沿 `ppid` 找到同名的树根，把**每个成员的 `PagefileUsage`** 加起来 | 用提交量而不是工作集：与任务管理器"内存"列一致，被换页时不会塌成 0 |
+
+树根是走出来的：从 `process.pid` 往上爬，只在父进程**映像名相同**且 pid 未访问时继续，
+否则就停在当前进程。所以 Electron 的 main/GPU/renderer/tool 会自然形成一棵树。
+
+### 「释放内存」到底做了什么
+
+只对本进程的 **V8 堆**做一次强制 GC（`v8.setFlagsFromString('--expose-gc')` +
+`vm.runInNewContext('gc')`，不需要启动参数）。实测：一次 ~3 ms，`heapUsed 33.2 → 4.4 MB`，
+而 `rss` 只降 `96.6 → 95.0 MB`。
+
+所以文案刻意分开写：**「只回收本进程 JS 堆；renderer 堆、Electron native 内存与系统缓存不动，
+所以任务管理器里不一定看到变化」**，`freedMb` 也只报 `heapUsed` 的差，不报 RSS —— 报 RSS 会骗人。
+
+### 数据怎么到浏览器
+
+```
+浏览器 ──GET /resource-guard/api/stats──▶ 宿主 webServer 路由 ──▶ GetSystemTimes / Toolhelp32 / GetProcessMemoryInfo
+        ◀── { grade, guard, heap, tree } ──
+```
+
+- **不经过模型**，不花 token，不刷对话。
+- 路由用 `ctx.connection.requestRejection(req)` 做信任判定（和 `dsh-better-sidebar` 同一道围栏），
+  **不是**自己发明鉴权。没有 `connection` 服务时退化为「只允许本机回环」并写一条 warn。
+- 请求 URL 必须是**页面同源的相对路径**：桌面 shell 的页面是 `dsh-app://app/`，
+  `protocol.handle` 会把非静态路径同源转发到宿主；用宿主真实地址（`__DSH_TRANSPORT__.streamBaseUrl`）
+  会跨源，而插件路由不发 CORS 头 → `Failed to fetch`。
+- 路由取不到数时组件渲染 `null`，不是占位符 —— 宿主半边挂掉不该把编辑器底栏弄坏。
+
+---
+
 ## 能力边界（必须说清）
 
 1. **插件不能给宿主加内存硬顶。** Job Object 的限额一旦附加就**无法解除**（Windows 没有把进程移出 Job 的 API）。给 Electron 自己套上限 = 把它永久锁在那个上限里。所以硬顶只能在**创建时**由启动壳施加，这也是它必须是两层的原因。
@@ -143,16 +199,20 @@ node scripts\launch.mjs --cap 12000 --low-priority
 3. **硬顶撞上是「杀进程」而不是「返回错误」。** 实测：Job 整树上限撞上时 Node 表现是 `FATAL ERROR: Committing semi space failed ... JavaScript heap out of memory` + 退出码 134，**拿不到可捕获的异常**。所以软层阈值必须低于硬顶——撞上硬顶的一方没有纠正机会。
 4. **`exec.arguments` 不能改写。** 只能拦，不能「帮你把命令改小」。
 5. **不是安全边界。** 不防恶意进程，也不防 DSH 之外的软件吃内存。
+6. **「释放内存」不是「释放整机内存」。** 它只回收本进程的 V8 堆。想真正把整机内存腾出来，
+   得关掉占内存的程序；想限制 DSH 的内存天花板，得用启动壳的 Job 硬顶。
+7. **读数有 2 秒延迟。** 采样间隔默认 `statusPillIntervalMs: 2000`，且宿主侧满树采样本身要 20~30 ms
+   （458 个进程的 Toolhelp 快照 23 ms）。
 
 ---
 
 ## 实测证据
 
-### 单元 / 集成测试（48 条全绿）
+### 单元 / 集成测试（69 条全绿）
 
 ```powershell
 npm test
-# ℹ tests 48  ℹ pass 48  ℹ fail 0
+# ℹ tests 69  ℹ pass 69  ℹ fail 0
 ```
 
 覆盖：阈值分级、迟滞、重活判定、决策、配置校验、优先级/亲和性的**可逆性**、
@@ -178,6 +238,22 @@ npm run verify:profile
 
 即：headless profile 真加载插件 → 真调 `pwsh` → 被拦 → **命令的副作用文件确实没被创建**。
 
+### 底栏读数条（真 web 服务，隔离 profile）
+
+```powershell
+npm run verify:pill
+# PASS: boot 图里有 dsh-resource-guard/client.js
+# PASS: combo 脚本可下载（实际 200）
+# PASS: 下载到的字节里有我们的 CSS 类名
+# PASS: GET /resource-guard/api/stats → 200（应当 200）
+# PASS: 带压力等级（normal）/ Win32 能力层可用 / 整树提交量有值（408 MB）
+# PASS: POST /resource-guard/api/gc 回收成功（freed 66.7 MB）
+# PASS: 不带 cookie → 403（围栏生效而不是路由缺失）
+```
+
+即：干净进程真加载客户端半边 → boot 图里真有这条 combo → 真下到字节 →
+宿主路由真返回本机读数 → 真回收了一次堆。
+
 ### 真实桌面宿主（已装在本机，证据见 `deploy-desktop.md`）
 
 - 拦下时我这个 agent 直接收到 `RESOURCE_GUARD_DENIED`，而不是「配置写对了」的推断
@@ -196,6 +272,11 @@ npm run verify:profile
 | 本进程已在 Job 里 | `CREATE_BREAKAWAY_FROM_JOB` 也返回 5 | DSH 的沙箱已把进程放进 Job。**不 breakaway 直接 assign 反而成功**（Windows 8+ 嵌套 Job） |
 | 短命进程采样 | 峰值报 2 MB | 0.3 秒就结束的命令一次都采不到；要读 Job 的 `PeakProcessMemoryUsed` |
 | schemastery 依赖 | `file://` 加载时报 `Cannot find module` | Node 从插件目录向上找 `node_modules`，那里没有 DSH 的包 |
+| 加了 `dsh.client` 却看不到读数条 | 插件在跑，底栏什么都没有 | `dsh-client-modules` 把「这个包不是客户端包」这个**否定结论按 Loader specifier 缓存到进程结束**（`pkgMeta` 从不清理）。**第一次加 `dsh.client` 必须重启 Electron**，HMR 救不了 |
+| 手拼 `/plugins/??<id>/client.js` 拿到 404 | 连内置包也 404 | 该路由只认识**已组合好的批次 URL**：`bundleResource` 用完整的 `pathname+search` 去 `responses` / `batchResponses` 查表。要从首页 HTML 里取真实 combo URL |
+| 客户端 `fetch` 报 `Failed to fetch` | 宿主路由明明在，浏览器就是打不通 | 桌面 shell 的页面是 `dsh-app://app/`。用宿主真实地址（`streamBaseUrl`）就是跨源，而插件路由不发 CORS 头。必须用**页面同源的相对路径** |
+| 路由返回 400 而不是 404/403 | 看起来像路径写错 | 在 `trustOf` 里直接写 `ctx.connection` —— cordis 里**访问未声明服务的属性本身会抛**，被 webserver 统一转成 400。要用 `ctx.get('connection')` 并包在 try 里 |
+| 改了插件的 `lib/*.js` 却像没生效 | HMR 没反应 | HMR 只监视 profile 的 `cordis.patch.yml` / `package.json`。改插件代码后要 touch 一下 patch 才会重新 `import` |
 
 ---
 
@@ -206,13 +287,19 @@ lib/pressure.js    纯逻辑：分级、迟滞、重活判定、决策（无副�
 lib/guardian.js    运行时：采样、装/撤可逆限制、门禁
 lib/win32.js       Win32 能力层：内存读数、优先级、亲和性、冻结、Job
 lib/config.js      StandardSchemaV1 配置校验
-lib/index.js       插件入口：pre-execute 门禁 + resource_guard 工具
+lib/index.js       插件入口：pre-execute 门禁 + resource_guard 工具 + 读数路由
+lib/tree-stats.js  整树读数：Toolhelp 枚举、按提交量求和、CPU 按 GetSystemTimes 差值算
+lib/host-api.js    /resource-guard/api 的 HTTP 处理器（stats / gc / 404 / 405）
+lib/gc.js          本进程 V8 堆的强制回收（不需要 --expose-gc 启动参数）
+client/source.js   浏览器半边：底栏读数条 + IDEA 式面板（ESM 源码，人读的那份）
+lib/client.js      上面那份经 scripts/build-client.mjs 机械转换后的产物（serve 层加载这个）
+scripts/build-client.mjs 只改 import/export 的构建脚本，转完会跑一次真语法校验
 scripts/launch.mjs 启动壳 CLI
 scripts/launcher.mjs 启动壳实现（Job 整树硬顶）
-scripts/verify-*.mjs 真机验收（可逆性 / Job 内核语义 / 启动壳 / 真 profile）
+scripts/verify-*.mjs 真机验收（可逆性 / Job 内核语义 / 启动壳 / 真 profile / 底栏读数条）
 scripts/verify-deny-probe.js 只在 .verify profile 里挂载的探针
 scripts/probe-*.cjs 一次性诊断探针（错误码、偏移量），留着是因为它们是那些教训的证据
-test/              48 条测试
+test/              69 条（pressure 19 / tree-stats 16 / guardian 14 / config 10 / integration 5 / client 契约 5）
 ```
 
 ## 一个必须改的地方：重活名单
