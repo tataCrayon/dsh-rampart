@@ -35,10 +35,16 @@ button.RGpill_pill:hover,button.RGpill_pill[aria-expanded=true]{background:var(-
 .RGpill_warn{color:var(--dsw-alias-state-warning-primary,#b8860b)}
 .RGpill_critical{color:var(--dsw-alias-state-error-primary,#d33)}
 .RGpill_dot{flex:none;width:6px;height:6px;border-radius:50%;background:currentColor}
+.RGpill_meter{position:relative;height:6px;border-radius:3px;overflow:hidden;background:var(--dsw-alias-interactive-bg-hover);margin:4px 0 2px}
+.RGpill_meterFill{position:absolute;inset:0 auto 0 0;border-radius:3px;background:var(--dsw-alias-label-tertiary);transition:width .3s ease}
+.RGpill_meterFill.RGpill_warn{background:var(--dsw-alias-state-warning-primary,#b8860b)}
+.RGpill_meterFill.RGpill_critical{background:var(--dsw-alias-state-error-primary,#d33)}
+.RGpill_meterHead{display:flex;justify-content:space-between;gap:12px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary)}
+.RGpill_meterHead b{color:var(--dsw-alias-label-secondary);font-weight:500;font-variant-numeric:tabular-nums}
 .RGpill_panel{position:fixed;z-index:1200;width:344px;max-width:calc(100vw - 24px);box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md);background:var(--dsw-specific-menu);box-shadow:var(--dsw-elevation-prominent);padding:10px 12px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}
 .RGpill_row{display:flex;justify-content:space-between;gap:12px;padding:2px 0}
-.RGpill_row dt{color:var(--dsw-alias-label-tertiary)}
-.RGpill_row dd{margin:0;font-variant-numeric:tabular-nums}
+.RGpill_row .RGpill_key{color:var(--dsw-alias-label-tertiary)}
+.RGpill_row .RGpill_val{font-variant-numeric:tabular-nums}
 .RGpill_title{display:flex;align-items:center;justify-content:space-between;font-weight:600;margin-bottom:6px}
 .RGpill_badge{border-radius:var(--dsw-radius-sm);padding:0 6px;font-weight:500;font-size:11px}
 .RGpill_rule{height:1px;background:var(--dsw-alias-border-l1);margin:8px 0}
@@ -205,6 +211,9 @@ export function StatusPill({ intervalMs = 2000, t }) {
 
   /**
    * 造一行「键 → 值」。
+   *
+   * 用 `span` 而不是 `dt`/`dd`：`dl` 里混装 `div` 是非法结构，浏览器会重新排布，
+   * 表现是行距忽大忽小。全部用 `span` + flex 就没有这个问题。
    * @param {string} labelKey 词典键。
    * @param {string} value 值文本。
    * @returns {any} React 节点。
@@ -213,8 +222,56 @@ export function StatusPill({ intervalMs = 2000, t }) {
     jsxs('div', {
       className: 'RGpill_row',
       children: [
-        jsx('dt', { children: translate(labelKey) }),
-        jsx('dd', { children: value }),
+        jsx('span', { className: 'RGpill_key', children: translate(labelKey) }),
+        jsx('span', { className: 'RGpill_val', children: value }),
+      ],
+    })
+
+  /**
+   * 算百分比，夹在 0~100。
+   * @param {number} used 已用。
+   * @param {number} total 总量。
+   * @returns {number} 0~100 的整数。
+   */
+  const percentOf = (used, total) => {
+    if (!Number.isFinite(used) || !Number.isFinite(total) || total <= 0) return 0
+    return Math.max(0, Math.min(100, Math.round((used / total) * 100)))
+  }
+
+  /**
+   * 造一条与 IDEA 内存指示器同构的用量条。
+   *
+   * IDEA 那个条的关键不是「好看」，而是**分母写在旁边**：`892M / 2G` 让人立刻知道
+   * 离顶还有多远。只画一条没有刻度的进度条等于没说。
+   *
+   * @param {string} labelKey 词典键（左侧说明）。
+   * @param {number} used 已用。
+   * @param {number} total 总量。
+   * @param {string} tone 'normal' | 'warn' | 'critical'。
+   * @returns {any} React 节点。
+   */
+  const meter = (labelKey, used, total, tone = 'normal') =>
+    jsxs('div', {
+      children: [
+        jsxs('div', {
+          className: 'RGpill_meterHead',
+          children: [
+            jsx('span', { children: translate(labelKey) }),
+            jsxs('b', { children: [`${formatMb(used)} / ${formatMb(total)}`, `  ${percentOf(used, total)}%`] }),
+          ],
+        }),
+        jsx('div', {
+          className: 'RGpill_meter',
+          role: 'progressbar',
+          'aria-label': translate(labelKey),
+          'aria-valuenow': percentOf(used, total),
+          'aria-valuemin': 0,
+          'aria-valuemax': 100,
+          children: jsx('span', {
+            className: `RGpill_meterFill${tone === 'normal' ? '' : ` RGpill_${tone}`}`,
+            style: { width: `${percentOf(used, total)}%` },
+          }),
+        }),
       ],
     })
 
@@ -251,7 +308,25 @@ export function StatusPill({ intervalMs = 2000, t }) {
                     jsx('span', { className: 'RGpill_badge', children: grade }),
                   ],
                 }),
-                jsxs('dl', {
+                jsx('div', { className: 'RGpill_rule' }),
+                meter(
+                  'guard.meterTree',
+                  dshMb === null ? 0 : dshMb,
+                  guard.totalMb ?? 0,
+                  critical ? 'critical' : warned ? 'warn' : 'normal',
+                ),
+                meter(
+                  'guard.meterHeap',
+                  stats.heap?.heapUsedMb ?? 0,
+                  stats.heap?.heapLimitMb ?? 0,
+                  percentOf(stats.heap?.heapUsedMb ?? 0, stats.heap?.heapLimitMb ?? 0) >= 85
+                    ? 'critical'
+                    : percentOf(stats.heap?.heapUsedMb ?? 0, stats.heap?.heapLimitMb ?? 0) >= 70
+                      ? 'warn'
+                      : 'normal',
+                ),
+                jsx('div', { className: 'RGpill_rule' }),
+                jsxs('div', {
                   style: { margin: 0 },
                   children: [
                     row('guard.machine', formatMb(guard.availPhysMb)),
@@ -267,11 +342,6 @@ export function StatusPill({ intervalMs = 2000, t }) {
                     row('guard.treeCpu', `${tree?.treePercent ?? 0}%`),
                     row('guard.denied', `${guard.deniedCalls ?? 0} / ${guard.delayedCalls ?? 0}`),
                   ],
-                }),
-                jsx('div', { className: 'RGpill_rule' }),
-                jsxs('dl', {
-                  style: { margin: 0 },
-                  children: [row('guard.heap', `${stats.heap?.heapUsedMb ?? 0} / ${stats.heap?.heapLimitMb ?? 0} MB`)],
                 }),
                 jsx('button', {
                   type: 'button',
@@ -315,6 +385,8 @@ const zh = {
   'guard.treeCpu': 'DSH CPU 占比',
   'guard.denied': '已拦 / 降速',
   'guard.heap': '本进程 JS 堆',
+  'guard.meterTree': 'DSH 占用 / 整机物理',
+  'guard.meterHeap': 'JS 堆 / 堆上限',
   'guard.collect': '释放内存',
   'guard.collecting': '回收中…',
   'guard.note': '只回收本进程 JS 堆，不动 renderer 与系统缓存。',
@@ -333,6 +405,8 @@ const en = {
   'guard.treeCpu': 'DSH CPU share',
   'guard.denied': 'Denied / delayed',
   'guard.heap': 'This process · JS heap',
+  'guard.meterTree': 'DSH of total RAM',
+  'guard.meterHeap': 'JS heap of limit',
   'guard.collect': 'Free memory',
   'guard.collecting': 'Collecting…',
   'guard.note': 'Collects this process JS heap only; renderers and OS cache are untouched.',
