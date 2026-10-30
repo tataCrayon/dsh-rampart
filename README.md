@@ -100,6 +100,13 @@ node scripts\launch.mjs --cap 12000 --low-priority
 **为什么默认值这么保守**：本机实测物理 32 GB、可用长期 2.7~3.3 GB（约 9%），提交内存同量级。
 误拦一条重活只是慢一点；漏拦一次重活是整机卡死。所以宁可早拦。
 
+**但装的时候一定要按本机实测重定阈值。** 实测教训（详见 `deploy-desktop.md`）：
+第一版用 `warnCommitMb: 4096` 装上去，`delayedCalls` 一路涨——因为这台机器**每一个**
+采样点的可用提交都在 4 GB 以下，那不是「压力大」，那是正常水位。
+改成低于实测最小值（2200）后，才只在真异常时才响。
+
+调参口诀：**阈值要压在「常态低谷」之下**，留 1 GB 左右的余量给真正的突发。
+
 **为什么「轻工具永不拦」**：压力大时更不该阻止模型 `read`/`grep`/`write`/`todo_write` —— 收尾、汇报、保存状态都是轻活。
 
 ---
@@ -170,6 +177,13 @@ npm run verify:profile
 ```
 
 即：headless profile 真加载插件 → 真调 `pwsh` → 被拦 → **命令的副作用文件确实没被创建**。
+
+### 真实桌面宿主（已装在本机，证据见 `deploy-desktop.md`）
+
+- 拦下时我这个 agent 直接收到 `RESOURCE_GUARD_DENIED`，而不是「配置写对了」的推断
+- `warn` 档 `delayedCalls` 涨了 → 门禁确实在真实调用链上
+- `disabled: true` 后优先级从 `BelowNormal` 回到 `Normal`，改回来又变 `BelowNormal` → 可逆
+- 优先级沿进程树继承：host `BelowNormal` → runner `BelowNormal` → powershell `BelowNormal`
 
 ---
 
