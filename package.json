@@ -1,0 +1,56 @@
+{
+  "name": "dsh-resource-guard",
+  "version": "0.1.0",
+  "description": "内存/CPU 压力护栏 for DeepSeek Harness: samples free physical and commit memory, drops the host to below-normal priority with a core cap, and refuses heavy tools (pwsh/bash/workflow/subagent) while the machine is under pressure, plus a launcher that puts the whole Electron tree under a Job Object memory ceiling.",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/pressure.js",
+    "lib/guardian.js",
+    "lib/win32.js",
+    "lib/config.js",
+    "lib/types/**/*.d.ts",
+    "cordis.patch.yml",
+    "scripts",
+    "dsh-guarded.cmd",
+    "README.md"
+  ],
+  "keywords": [
+    "deepseek",
+    "harness",
+    "dsh",
+    "dsh-plugin",
+    "resource",
+    "memory",
+    "guard"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.5"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\"",
+    "verify": "node scripts/verify-reversible.mjs && node scripts/verify-cap.mjs && node scripts/verify-launcher-job.mjs",
+    "verify:profile": "node scripts/verify-profile.mjs",
+    "launch": "node scripts/launch.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "manifestVersion": 1
+  }
+}

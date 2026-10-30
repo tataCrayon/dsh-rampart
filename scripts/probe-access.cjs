@@ -1,0 +1,20 @@
+﻿const koffi = require('koffi')
+const kernel32 = koffi.load('kernel32.dll')
+const { spawn } = require('node:child_process')
+const OpenProcess = kernel32.func('void *OpenProcess(uint32 access, int inherit, uint32 pid)')
+const CreateJobObjectW = kernel32.func('void *CreateJobObjectW(void *a, const char16_t *n)')
+const SetInformationJobObject = kernel32.func('int SetInformationJobObject(void *job, int cls, void *info, uint32 len)')
+const AssignProcessToJobObject = kernel32.func('int AssignProcessToJobObject(void *job, void *proc)')
+const GetLastError = kernel32.func('uint32 GetLastError()')
+
+for (const access of [0x0100|0x0200, 0x0100|0x0200|0x0001]) {
+  const child = spawn(process.execPath, ['-e','setTimeout(()=>{},3000)'], { stdio: 'ignore' })
+  const h = OpenProcess(access, 0, child.pid)
+  const job = CreateJobObjectW(null, null)
+  const info = Buffer.alloc(144)
+  info.writeUInt32LE(0x2000, 16)
+  SetInformationJobObject(job, 9, info, 144)
+  const ok = AssignProcessToJobObject(job, h)
+  console.log('access 0x' + access.toString(16), '=> assign', ok, ok ? '' : 'err ' + GetLastError())
+  child.kill()
+}

@@ -1,0 +1,4 @@
+# 验证产物与本地探针产生的临时文件
+.verify/
+node_modules/
+*.log
