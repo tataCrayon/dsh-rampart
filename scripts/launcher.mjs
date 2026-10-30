@@ -85,7 +85,7 @@ async function loadBindings() {
 /**
  * 加入 Job 所需的进程访问权限。
  *
- * 少 `PROCESS_TERMINATE` 会得到 `ERROR_ACCESS_DENIED(5)`（实测，见 scripts/probe-access.cjs），
+ * 少 `PROCESS_TERMINATE` 会得到 `ERROR_ACCESS_DENIED(5)`（实测，见 scripts/probe-self-join-error.mjs），
  * 而那个错误码完全指错方向：看起来像「没权限」，实际是权限位不完整。
  */
 const PROCESS_ACCESS_FOR_JOB = 0x0001 | 0x0100 | 0x0200 | 0x0400
@@ -100,6 +100,7 @@ function createJob(mod, capMb) {
   const api = mod.extendWin32ProcessBindings(({ kernel32 }) => ({
     openProcess: kernel32.func('void *OpenProcess(uint32 access, int inherit, uint32 pid)'),
     setPriorityClass: kernel32.func('int SetPriorityClass(void *h, uint32 cls)'),
+    isProcessInJob: kernel32.func('int IsProcessInJob(void *proc, void *job, void *result)'),
   }))
   const job = api.createJobObjectW(null, null)
   if (!job) throw new Error('CreateJobObjectW failed')
@@ -117,13 +118,51 @@ function createJob(mod, capMb) {
 }
 
 /**
+ * 构造子进程环境：去掉会让 Electron 变成「纯 Node」的那几个变量。
+ *
+ * 踩过的坑：本机 DSH 宿主里带着 `ELECTRON_RUN_AS_NODE=1`（harness 用它跑 node 脚本），
+ * 如果直接继承，`DeepSeek Harness.exe --user-data-dir=...` 会被当成 node 启动，
+ * 报 `bad option: --user-data-dir=...` 然后静默退出——看起来像「Electron 起不来」。
+ * @returns {NodeJS.ProcessEnv} 清理后的环境。
+ */
+function childEnv() {
+  const env = { ...process.env }
+  delete env.ELECTRON_RUN_AS_NODE
+  delete env.DSH_SHELL
+  return env
+}
+
+/**
+ * 把启动壳自己放进 Job —— 这样随后 spawn 的 Electron 一出生就是 Job 成员。
+ *
+ * 为什么不能「先 spawn 再 assign」：那中间有个窗口期，Electron 的 renderer / gpu
+ * 往往在 assign 之前就生出来了，这些孩子**不算** Job 成员，硬顶直接漏掉。
+ * 实测（scripts/probe-job-tree.mjs）：外部 spawn 的进程 `IsProcessInJob` 为 false。
+ *
+ * Windows 8+ 支持嵌套 Job，所以即使启动壳本身已在别的 Job 里（例如被沙箱包着），
+ * 这一句仍然成立。
+ * @param {any} api 绑定集合。
+ * @param {any} job Job 句柄。
+ * @returns {boolean} 是否成功加入。
+ */
+function joinSelf(api, job) {
+  const handle = api.openProcess(PROCESS_ACCESS_FOR_JOB, 0, process.pid)
+  if (!handle) return false
+  try {
+    return api.assignProcessToJobObject(job, handle) !== 0
+  } finally {
+    api.closeHandle(handle)
+  }
+}
+
+/**
  * 启动并施加硬顶。
  * @param {object} options 启动参数。
  * @param {string} [options.app] 应用路径。
  * @param {number} capMb 内存硬顶 MB。
  * @param {boolean} [options.lowPriority] 是否降到 BELOW_NORMAL。
  * @param {string[]} [options.args] 传给应用的参数。
- * @returns {Promise<{pid: number, capMb: number, exitCode: number}>} 退出结果。
+ * @returns {Promise<{pid: number, capMb: number, exitCode: number, inherited: boolean}>} 退出结果。
  */
 export async function launchGuarded(options) {
   const app = resolveHostExecutable(options.app)
@@ -131,35 +170,45 @@ export async function launchGuarded(options) {
   const mod = await loadBindings()
   const { job, api } = createJob(mod, capMb)
 
-  // 用 detached 让 Electron 自己成为进程树根，避免它继承本启动器的控制台会话。
-  const child = spawn(app, options.args ?? [], {
-    stdio: 'inherit',
-    detached: false,
-    windowsHide: false,
-  })
-
-  const assigned = (() => {
-    const handle = api.openProcess(PROCESS_ACCESS_FOR_JOB, 0, child.pid)
-    if (!handle) return false
+  // 自己先降优先级：子进程会继承优先级类，省掉一次「起来后才降」的窗口。
+  if (options.lowPriority) {
     try {
-      return api.assignProcessToJobObject(job, handle) !== 0
-    } finally {
-      api.closeHandle(handle)
-    }
-  })()
-
-  if (!assigned) {
-    process.stderr.write(`[dsh-guarded] 警告：无法把 pid ${child.pid} 加入 Job，硬顶未生效\n`)
-  } else if (options.lowPriority) {
-    try {
-      const handle = api.openProcess(0x0200, 0, child.pid)
-      if (handle) {
-        api.setPriorityClass(handle, 0x0000_4000)
-        api.closeHandle(handle)
+      const self = api.openProcess(0x0200, 0, process.pid)
+      if (self) {
+        api.setPriorityClass(self, 0x0000_4000)
+        api.closeHandle(self)
       }
     } catch {
-      /* 低优先级是锦上添花，失败不影响硬顶 */
+      /* 低优先级是锦上添花 */
     }
+  }
+
+  const joined = joinSelf(api, job)
+
+  // 启动壳已在 Job 内 → 孩子一出生就继承，无窗口期；否则退化为起完再 assign。
+  const child = spawn(app, options.args ?? [], {
+    stdio: options.stdio ?? 'inherit',
+    detached: false,
+    windowsHide: false,
+    env: childEnv(),
+  })
+
+  const inherited = joined
+    ? true
+    : (() => {
+        const handle = api.openProcess(PROCESS_ACCESS_FOR_JOB, 0, child.pid)
+        if (!handle) return false
+        try {
+          return api.assignProcessToJobObject(job, handle) !== 0
+        } finally {
+          api.closeHandle(handle)
+        }
+      })()
+
+  if (!inherited) {
+    process.stderr.write(`[dsh-guarded] 警告：pid ${child.pid} 未进入 Job，硬顶未生效\n`)
+  } else {
+    process.stderr.write(`[dsh-guarded] 硬顶 ${capMb} MB 已施加（pid ${child.pid}）\n`)
   }
 
   const exitCode = await new Promise((resolve) => {
@@ -167,5 +216,5 @@ export async function launchGuarded(options) {
   })
   // KILL_ON_JOB_CLOSE：这里关掉句柄会顺带清掉可能残留的子进程。
   api.closeHandle(job)
-  return { pid: child.pid, capMb, exitCode }
+  return { pid: child.pid, capMb, exitCode, inherited }
 }
