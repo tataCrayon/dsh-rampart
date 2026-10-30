@@ -1,4 +1,4 @@
-# dsh-resource-guard
+﻿# dsh-resource-guard
 
 给 DeepSeek Harness 加一层**内存/CPU 压力护栏**：机器快被吃穿时先踩刹车，而不是等它卡死。
 
@@ -208,11 +208,11 @@ CPU 12% · DSH 1.2 GB
 
 ## 实测证据
 
-### 单元 / 集成测试（69 条全绿）
+### 单元 / 集成测试（70 条全绿）
 
 ```powershell
 npm test
-# ℹ tests 69  ℹ pass 69  ℹ fail 0
+# ℹ tests 70  ℹ pass 70  ℹ fail 0
 ```
 
 覆盖：阈值分级、迟滞、重活判定、决策、配置校验、优先级/亲和性的**可逆性**、
@@ -299,7 +299,7 @@ scripts/launcher.mjs 启动壳实现（Job 整树硬顶）
 scripts/verify-*.mjs 真机验收（可逆性 / Job 内核语义 / 启动壳 / 真 profile / 底栏读数条）
 scripts/verify-deny-probe.js 只在 .verify profile 里挂载的探针
 scripts/probe-*.cjs 一次性诊断探针（错误码、偏移量），留着是因为它们是那些教训的证据
-test/              69 条（pressure 19 / tree-stats 16 / guardian 14 / config 10 / integration 5 / client 契约 5）
+test/              70 条（pressure 19 / tree-stats 16 / guardian 14 / config 10 / integration 5 / client 契约 6）
 ```
 
 ## 一个必须改的地方：重活名单

@@ -133,3 +133,24 @@ test('读数是同源相对路径，不是宿主绝对地址', () => {
   assert.equal(exported.formatMb(860), '860 MB')
   assert.equal(exported.formatMb(0), '—')
 })
+
+test('面板有两条带语义的用量条（IDEA 式），且行标记不用 dl/dt/dd', () => {
+  const exported = materialize()
+  assert.ok(exported.CSS.includes('.RGpill_meter{'), '必须有用量条轨道样式')
+  assert.ok(exported.CSS.includes('.RGpill_meterFill'), '必须有填充样式')
+  assert.ok(exported.CSS.includes('.RGpill_meterFill.RGpill_warn'), '堆用量偏高时应当能转警示色')
+
+  const source = readFileSync(new URL('../client/source.js', import.meta.url), 'utf8')
+  // 无障碍：进度条要有 role 与 aria-valuenow，否则读屏软件只能念一个空 div
+  assert.ok(source.includes("role: 'progressbar'"), '用量条必须是 progressbar 角色')
+  assert.ok(source.includes("'aria-valuenow'"), '用量条必须报 aria-valuenow')
+
+  // 回归：dl 里混装 div 是非法结构，会让行距忽大忽小
+  assert.ok(!source.includes("jsxs('dl'"), '不要用 dl 装 div')
+  assert.ok(!source.includes("jsx('dt'"), '不要用 dt')
+  assert.ok(!source.includes("jsx('dd'"), '不要用 dd')
+
+  // 两条条的分母必须显式给出：只画进度条不写总量等于没说
+  assert.ok(source.includes('guard.meterTree'), '必须有「DSH 占用 / 整机物理」这条')
+  assert.ok(source.includes('guard.meterHeap'), '必须有「JS 堆 / 堆上限」这条')
+})
