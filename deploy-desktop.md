@@ -54,9 +54,14 @@ criticalCommitMb: 1400      # 可用提交 < 1.4 GB → critical
 escalateSamples: 3          # 连续 3 次越线才升级（5s 一次 → 约 15s）
 recoverSamples: 3
 sampleIntervalMs: 5000
-priority: below-normal
+priority: on-pressure        # 平时全速，到 warn 才降（见 README「below-normal 慢 2~3 倍」）
 limitCores: 0               # 不钉核
 ```
+
+> 这里原本写的是 `priority: below-normal`。改成 `on-pressure` 的原因：本机是 i7-13700
+> （8 P + 8 E），低优先级线程被排到 E 核，CPU 密集的工具实测慢 **2~3 倍**
+> （单线程 ×3.18、真实子进程 ×2.27、4 并发 ×2.15）。没有内存压力时这笔钱是白付的。
+> 详见 `README.md` 的「一个真踩到的坑：below-normal 会让工具慢 2~3 倍」。
 
 ### 为什么第一版阈值不对
 

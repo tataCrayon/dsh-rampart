@@ -20,6 +20,14 @@ if (!win32.available) {
   process.exit(0)
 }
 
+const inherited = win32.getPriority()
+// 从 DSH 里跑这个脚本时，宿主可能已经是 BELOW_NORMAL（子进程继承），
+// 那时的断言会「因为本来就是低优先级」而假通过。所以先拉到 NORMAL 再验。
+if (inherited !== 0x20) {
+  console.log(`注意：本进程继承到的优先级是 0x${inherited.toString(16)}（不是 NORMAL），已临时拉回 0x20 再验`)
+  assert.equal(win32.setPriority(0x20), true, '应能拉回 NORMAL')
+}
+
 const baseline = {
   priority: win32.getPriority(),
   affinity: win32.getAffinity().process,
@@ -84,3 +92,53 @@ child.kill()
 
 // 子进程继承优先级：这是「降优先级」真正有价值的地方
 console.log('RESULT: PASS — 优先级与亲和性装上后能完整恢复')
+
+// ── 第二段：on-pressure 在真机上来回切换，并且每次都还原 ──────────────
+console.log('\n── on-pressure：只在有压力时降，回线立刻恢复 ──')
+const dynamic = new ResourceGuardian({
+  config: {
+    enabled: true,
+    warnFreeMemoryMb: 2048,
+    criticalFreeMemoryMb: 1024,
+    warnCommitMb: 3072,
+    criticalCommitMb: 1536,
+    escalateSamples: 1,
+    recoverSamples: 1,
+    sampleIntervalMs: 0,
+    priority: 'on-pressure',
+    limitCores: 0,
+    warnDelayMs: 0,
+    criticalDelayMs: 0,
+    denyHeavyOnWarn: false,
+    denyHeavyOnCritical: true,
+    heavyTools: ['pwsh'],
+    heavyPatterns: ['job_*'],
+  },
+})
+
+// 手动喂内存读数，才能在真机上把等级推到 warn 再推回来
+const realStatus = win32.memoryStatus.bind(win32)
+let fakeMemory = null
+win32.memoryStatus = () => (fakeMemory ?? realStatus())
+win32.available = true
+dynamic.win32 = win32
+await dynamic.start()
+assert.equal(win32.getPriority(), baseline.priority, '没压力时不该动优先级')
+console.log(`  无压力：优先级 ${win32.getPriority()}（未变）PASS`)
+
+fakeMemory = { totalMb: 32768, availPhysMb: 1500, availCommitMb: 8192, loadPercent: 95 }
+dynamic.tick()
+assert.equal(win32.getPriority(), WIN32.BELOW_NORMAL_PRIORITY_CLASS, 'warn 时应降级')
+console.log(`  warn：优先级 ${win32.getPriority()}（已降）PASS`)
+
+fakeMemory = null
+dynamic.tick()
+assert.equal(win32.getPriority(), baseline.priority, '回线应立刻恢复')
+console.log(`  回线：优先级 ${win32.getPriority()}（已恢复）PASS`)
+
+win32.memoryStatus = realStatus
+await dynamic.dispose()
+assert.equal(win32.getPriority(), baseline.priority, 'dispose 后必须仍是原值')
+console.log(`  dispose：优先级 ${win32.getPriority()}（原值）PASS`)
+console.log('RESULT: PASS — on-pressure 升降与还原都成立')
+

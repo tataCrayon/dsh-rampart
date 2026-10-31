@@ -94,9 +94,9 @@ test('lowestBitsMask：取最低的 N 个可用核', () => {
   assert.equal(lowestBitsMask(0n, 4), 0n)
 })
 
-test('start：降优先级并记下恢复动作，dispose 后恢复原值', async () => {
+test('start：below-normal 模式启动即降优先级，dispose 后恢复原值', async () => {
   const win32 = fakeWin32()
-  const guardian = new ResourceGuardian({ config: config({ limitCores: 0 }), env: {} })
+  const guardian = new ResourceGuardian({ config: config({ priority: 'below-normal', limitCores: 0 }), env: {} })
   guardian.win32 = win32
 
   await guardian.start()
@@ -104,6 +104,55 @@ test('start：降优先级并记下恢复动作，dispose 后恢复原值', asyn
 
   await guardian.dispose()
   assert.equal(win32.state.priority, 0x20, '恢复原优先级')
+})
+
+test('on-pressure：压力正常时不动优先级（不白付 2~3 倍 CPU）', async () => {
+  const win32 = fakeWin32()
+  const guardian = new ResourceGuardian({ config: config({ priority: 'on-pressure', limitCores: 0 }), env: {} })
+  guardian.win32 = win32
+
+  await guardian.start()
+  assert.equal(win32.state.priority, 0x20, '没压力就保持 NORMAL')
+  assert.equal(win32.calls.filter(([name]) => name === 'setPriority').length, 0, '一次 syscall 都不该发生')
+})
+
+test('on-pressure：升到 warn 才降，回到 normal 立刻恢复', async () => {
+  const win32 = fakeWin32()
+  const guardian = new ResourceGuardian({ config: config({ priority: 'on-pressure', limitCores: 0 }), env: {} })
+  guardian.win32 = win32
+  await guardian.start()
+
+  win32.state.memory = { totalMb: 32768, availPhysMb: 1500, availCommitMb: 8192, loadPercent: 95 }
+  guardian.tick()
+  assert.equal(win32.state.priority, 0x4000, 'warn 时让位')
+
+  win32.state.memory = { totalMb: 32768, availPhysMb: 8192, availCommitMb: 8192, loadPercent: 25 }
+  guardian.tick()
+  assert.equal(win32.state.priority, 0x20, '压力解除立刻拿回全速')
+})
+
+test('on-pressure：重复 tick 不重复发同一个 syscall', async () => {
+  const win32 = fakeWin32({ memory: { totalMb: 32768, availPhysMb: 500, availCommitMb: 8192, loadPercent: 98 } })
+  const guardian = new ResourceGuardian({ config: config({ priority: 'on-pressure', limitCores: 0 }), env: {} })
+  guardian.win32 = win32
+  await guardian.start()
+  for (let i = 0; i < 5; i += 1) guardian.tick()
+  assert.equal(
+    win32.calls.filter(([name]) => name === 'setPriority').length,
+    1,
+    '持续高压只降一次，不该每 tick 都刷',
+  )
+})
+
+test('on-pressure：dispose 时若仍处于降级状态，要恢复', async () => {
+  const win32 = fakeWin32({ memory: { totalMb: 32768, availPhysMb: 500, availCommitMb: 8192, loadPercent: 98 } })
+  const guardian = new ResourceGuardian({ config: config({ priority: 'on-pressure', limitCores: 0 }), env: {} })
+  guardian.win32 = win32
+  await guardian.start()
+  assert.equal(win32.state.priority, 0x4000)
+
+  await guardian.dispose()
+  assert.equal(win32.state.priority, 0x20, '卸载也必须还原')
 })
 
 test('start：limitCores>0 时钉核，dispose 后恢复原掩码', async () => {

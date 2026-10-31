@@ -38,8 +38,16 @@ export interface GuardConfig {
   recoverSamples: number
   /** 后台采样间隔；0 表示只在工具调用前采样。 */
   sampleIntervalMs: number
-  /** 进程优先级策略。 */
-  priority: 'unchanged' | 'below-normal'
+  /**
+   * 进程优先级策略。
+   *
+   * - `on-pressure`（默认）：平时保持原优先级，进入 warn/critical 才降，
+   *   压力解除立刻恢复。**这是默认值**，因为降优先级在混合核 CPU 上是拿
+   *   2~3 倍 CPU 时间换前台响应，没压力时白花。
+   * - `below-normal`：启动即永久降级，退出时才恢复。
+   * - `unchanged`：从不碰优先级。
+   */
+  priority: 'unchanged' | 'on-pressure' | 'below-normal'
   /** 钉住的核数；0 表示不动亲和性。 */
   limitCores: number
   /** warn 等级下重活的额外等待。 */

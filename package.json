@@ -1,7 +1,7 @@
 {
   "name": "dsh-rampart",
   "version": "0.2.0",
-  "description": "Memory and CPU guard for DeepSeek Harness: reads free physical/commit memory and whole-tree CPU, grades pressure normal/warn/critical with hysteresis, puts the host at below-normal priority, and refuses heavy tools (pwsh/bash/workflow/subagent) before the machine thrashes. Ships a composer readout showing how much of the machine DSH itself is using.",
+  "description": "Memory and CPU guard for DeepSeek Harness: reads free physical/commit memory and whole-tree CPU, grades pressure normal/warn/critical with hysteresis, drops the host to below-normal priority only while pressure lasts, and refuses heavy tools (pwsh/bash/workflow/subagent) before the machine thrashes. Ships a composer readout showing how much of the machine DSH itself is using.",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",

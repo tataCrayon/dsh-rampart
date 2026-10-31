@@ -25,7 +25,7 @@ test('空配置补出完整默认值', () => {
   assert.equal(result.value.enabled, true)
   assert.equal(result.value.warnFreeMemoryMb, DEFAULTS.warnFreeMemoryMb)
   assert.equal(result.value.criticalFreeMemoryMb, DEFAULTS.criticalFreeMemoryMb)
-  assert.equal(result.value.priority, 'below-normal')
+  assert.equal(result.value.priority, 'on-pressure')
   assert.deepEqual(result.value.heavyTools, [...DEFAULTS.heavyTools])
 })
 
@@ -65,9 +65,11 @@ test('非法类型被拒绝而不是被强转', () => {
   assert.ok(check({ heavyTools: 'pwsh' }).issues, '必须是数组')
 })
 
-test('priority 只接受两个值', () => {
+test('priority 只接受三个值', () => {
   assert.ok(check({ priority: 'high' }).issues)
   assert.equal(check({ priority: 'unchanged' }).value.priority, 'unchanged')
+  assert.equal(check({ priority: 'on-pressure' }).value.priority, 'on-pressure')
+  assert.equal(check({ priority: 'below-normal' }).value.priority, 'below-normal')
 })
 
 test('显式布尔开关不做隐式强转', () => {

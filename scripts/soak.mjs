@@ -63,7 +63,32 @@ function mb(bytes) {
   check(last !== null && last.processCount >= 1, '树采样持续可用')
 }
 
-// ── 3) 并发门禁：200 个 gate 同时进来，结果不能互相污染 ─────────────────
+// ── 2b) 多窗口轮询：并发请求必须合并，不能各自冻结一次事件循环 ────────────
+{
+  // 每个窗口一个 StatusPill，各自独立 setInterval 打 /stats。旧实现是「每次请求都
+  // 真采一次」，8 个窗口就是 8×15 ms 的同步冻结；这条守住「与窗口数解耦」。
+  let enumerations = 0
+  const counting = {
+    ...win32,
+    api: new Proxy(win32.api, {
+      get(target, key) {
+        const value = target[key]
+        if (key !== 'createToolhelp32Snapshot') return value
+        return (...args) => {
+          enumerations += 1
+          return value.apply(target, args)
+        }
+      },
+    }),
+  }
+  const sampler = new TreeSampler({ win32: async () => counting, cores: 8, minIntervalMs: 1000 })
+  await sampler.sample()
+  const base = enumerations
+  const waves = await Promise.all(Array.from({ length: 8 }, () => sampler.sample()))
+  const afterBurst = enumerations - base
+  check(afterBurst === 0, `8 个窗口同时轮询只复用缓存（新增枚举 ${afterBurst} 次，期望 0）`)
+  check(new Set(waves).size === 1, '8 个并发请求拿到同一份读数')
+}
 {
   const guardian = new ResourceGuardian({ config })
   await guardian.init()
