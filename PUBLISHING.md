@@ -45,31 +45,48 @@
 - [x] `dsh.bundle.patch` + `cordis.patch.yml` + `dsh.client` 三件套齐
 - [x] `LICENSE`（MIT）、`assets/icon-180.png`（市场卡片图标）、`assets/icon-1024.png`（宣传图）
 - [x] GitHub 仓库 `tataCrayon/dsh-rampart` 已建，`dsh-plugin` 等 topic 已打
-- [x] 72 条单测全绿（`npm test`）
+- [x] **代码已推到 master**，`0bb76c3b21235b945d7fc64481190f301d38b796`
+- [x] 72 条单测全绿（`npm test`）；`npm run verify:pill` 与 `verify:profile` 全 PASS
 
-**还差三步**：推到 GitHub → 发到 npm → 提市场条目。下面逐步给命令。
+**还差两步**：发到 npm、提市场条目。下面逐步给命令。
 
 ---
 
-## 2. 推到 GitHub
+## 2. 推到 GitHub（已完成）
 
 ```powershell
 cd D:\Projects\MyProjects\dsh-resource-guard
 git add -A
-git commit -m "feat: 改名 dsh-rampart；读数条移到上下文环右侧；内存/CPU 改为单条分段占比"
-git remote add origin https://github.com/tataCrayon/dsh-rampart.git   # 已有则跳过
+git commit -m "..."
 git push -u origin master
 ```
 
-凭据已在 Windows Credential Manager 里（`tataCrayon`，scope 含 `repo`），
+远端 `origin` 已设为 `https://github.com/tataCrayon/dsh-rampart.git`。
+凭据在 Windows Credential Manager 里（`tataCrayon`，scope 含 `repo`），
 全局配了 `http.https://github.com.proxy=http://127.0.0.1:7897`，push 会走代理。
+
+> **`gh` CLI 没装成也不用装。** 建仓库这件事直接用已存的 git 凭据打
+> `POST /user/repos` 就够了（本次就是这么建的）：
+>
+> ```powershell
+> $t = ("protocol=https`nhost=github.com`n`n" | git credential fill |
+>       Select-String '^password=').Line -replace '^password=',''
+> Invoke-RestMethod -Uri https://api.github.com/user/repos -Method Post `
+>   -Headers @{ Authorization = "token $t"; 'user-agent' = 'dsh-rampart' } `
+>   -Body (@{ name='dsh-rampart'; description='...'; private=$false } | ConvertTo-Json)
+> ```
+>
+> 打 topic 用 `PUT /repos/{owner}/{repo}/topics`，body `{ "names": [...] }`。
 
 ---
 
 ## 3. 发到 npm
 
+**当前状态：`dsh-rampart` 名字可用（`registry.npmjs.org` 返回 404），但本机没登录**（`npm whoami` → `ENEEDAUTH`）。
+
 ```powershell
-npm login                       # 浏览器授权；本机当前是「未登录」状态
+cd D:\Projects\MyProjects\dsh-resource-guard
+npm login                       # 浏览器授权
 npm publish                     # prepublishOnly 会自动 build:client + test
 npm view dsh-rampart version    # 确认
 ```
@@ -82,9 +99,15 @@ npm test
 npm pack --dry-run              # 看一眼真的会打包哪些文件
 ```
 
+本次实测的 `npm pack --dry-run`：**20 个文件、61.2 kB**。
+
 `package.json` 的 `files` 已收敛：只带 `lib/`、`client/source.js`、`cordis.patch.yml`、
 启动壳的三个文件、`assets/icon-180.png`、`README.md`、`LICENSE`。
-`deploy-desktop.md` 是本机现场记录，**不发布**（它含本机路径）。
+`deploy-desktop.md` / `PUBLISHING.md` 是本机现场记录，**不发布**（含本机路径）。
+
+> 不发 npm 也能用：`dsh plugin add github:tataCrayon/dsh-rampart` 直接从 git 装。
+> 但**市场条目的 `source.type: "npm"` 需要真发到 registry**；给 git 源就得在版本里
+> 写 40 位 commit SHA（发了新提交就要改索引，维护成本高）。所以建议发 npm。
 
 ---
 
@@ -151,6 +174,24 @@ format-1 索引（放 GitHub Pages / jsDelivr / 任意 https 静态托管）：
 
 ---
 
+## 5.1 改名后本机活体验证（2026-10-31）
+
+改包名相当于换 Loader specifier，所以这次**不吃** `dsh-client-modules` 那条
+「这个包不是客户端包」的否定缓存 —— 保存 patch 后宿主半边立刻重组了：
+
+```
+GET /rampart/api/stats        -> 403   # 路由已挂，被 connection 围栏挡（正确）
+GET /resource-guard/api/stats -> 404   # 旧前缀已经不存在
+```
+
+403 而不是 404 是关键区别：404 说明路由根本没挂，403 说明**路由在、只是没带会话 cookie**
+（和 `npm run verify:pill` 里那条「不带 cookie → 403」同一个道理）。
+
+桌面 profile 已同步：旧 junction 删除、新 junction 建好、patch 里 `id: rampart` /
+`name: 'dsh-rampart'`。
+
+---
+
 ## 6. 本机当前是「本地链接」安装，不是市场安装
 
 现在的 desktop profile 用的是 junction：
@@ -159,20 +200,26 @@ format-1 索引（放 GitHub Pages / jsDelivr / 任意 https 静态托管）：
 …\profiles\desktop\node_modules\dsh-rampart → D:\Projects\MyProjects\dsh-resource-guard
 ```
 
-**改名后这个 junction 还是旧名字 `dsh-resource-guard`，patch 里那行也还是旧包名**，
-需要一次性改过来（HMR 会自己重组，但 `dsh-client-modules` 的模块元信息缓存
-按 specifier 记住「不是客户端包」的否定结论，**改包名等于换 specifier，所以这次反而
-不吃那个缓存**；仍建议重启一次确认）：
+**改名已一次性完成**（2026-10-31）：旧 junction `dsh-resource-guard` 已删，
+新 junction 已建，patch 里的 `id` / `name` 已改成 `rampart` / `dsh-rampart`。
+`deploy-desktop.md` 里记的是旧名字，那是当时的现场记录，保留不改。
+
+装成市场版之后就把 junction 删掉，改由 `dsh plugin add dsh-rampart` 管理，
+这样 Plugin Manager 能升级/卸载它。
+
+**然后再也不用动这里。** 下面这些是当时执行的命令，留作参考：
 
 ```powershell
 $profile = "D:\Users\zigang.wang\.dsh\profiles\desktop"
 cmd /c rmdir "$profile\node_modules\dsh-resource-guard"
 cmd /c mklink /J "$profile\node_modules\dsh-rampart" "D:\Projects\MyProjects\dsh-resource-guard"
-# 再把 cordis.patch.yml 末尾那条 insert 的 name 改成 dsh-rampart
+# 再把 cordis.patch.yml 末尾那条 insert 的 id / name 改成 rampart / dsh-rampart
 ```
 
-装成市场版之后就把 junction 删掉，改由 `dsh plugin add dsh-rampart` 管理，
-这样 Plugin Manager 能升级/卸载它。
+⚠️ **别用 `Set-Content` / `Out-File` 改那个 patch。** 它含中文注释，PowerShell 的
+默认编码会把 UTF-8 写成 GBK，`js-yaml` 一读就报 `duplicated mapping key`，
+整个 profile 直接起不来（本次踩了，从 `.bak` 恢复的）。要用 Node 的
+`readFileSync(p,'utf8')` → `writeFileSync(p,t,'utf8')`。
 
 ---
 
