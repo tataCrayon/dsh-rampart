@@ -179,3 +179,112 @@ test('读数条挪到上下文占用环右边（靠 CSS order，不是 slot orde
   assert.ok(exported.CSS.includes('.RGpill_anchor{order:1'), '上下文环是 InputBar 硬编码在 dock 末尾的，只能用 CSS order 越过它')
   assert.ok(exported.CSS.includes('display:inline-flex'), '根节点必须是 flex item，否则 order 不生效')
 })
+
+/**
+ * 在一个干净的全局环境里跑一段异步代码。
+ *
+ * `fetchStats` 依赖全局 `fetch` 与全局 `document`（用来拼同源地址）。默认环境里
+ * `document` 不存在，`new URL(相对路径, '')` 会直接抛错 → 被 catch 成 null，
+ * 于是「超时」这条测试会**假通过**。所以必须先把 document 装上。
+ * @param {(helpers: object) => Promise<void>} body 测试体。
+ * @returns {Promise<void>}
+ */
+async function withGlobals(body) {
+  const original = { fetch: globalThis.fetch, document: globalThis.document }
+  const calls = []
+  globalThis.document = { baseURI: 'http://127.0.0.1:1/' }
+  try {
+    await body({
+      calls,
+      /** 装一个假的 fetch。 */
+      setFetch: (impl) => {
+        globalThis.fetch = async (url, init) => {
+          calls.push({ url: String(url), init })
+          return impl(url, init)
+        }
+      },
+    })
+  } finally {
+    globalThis.fetch = original.fetch
+    if (original.document === undefined) delete globalThis.document
+    else globalThis.document = original.document
+  }
+}
+
+test('请求有硬超时：宿主不响应时读数链不会永久停在半路', async () => {
+  const exported = materialize()
+  await withGlobals(async ({ setFetch }) => {
+    setFetch(() => new Promise(() => {})) // 永不 resolve，模拟宿主 / 代理吞掉连接
+    const started = Date.now()
+    const result = await exported.fetchStats(undefined, 40)
+    const elapsed = Date.now() - started
+    assert.equal(result, null, '超时后必须返回 null（保持上一份读数），不能挂住')
+    assert.ok(elapsed < 2000, `必须在超时后很快返回，实际 ${elapsed}ms`)
+  })
+})
+
+test('超时之外，正常响应仍然照常解析（证明上一条不是空过）', async () => {
+  const exported = materialize()
+  await withGlobals(async ({ setFetch, calls }) => {
+    setFetch(() => ({ ok: true, json: async () => ({ ok: true, guard: { grade: 'warn' } }) }))
+    const result = await exported.fetchStats(undefined, 40)
+    assert.deepEqual(result, { ok: true, guard: { grade: 'warn' } })
+    assert.equal(calls.length, 1)
+    assert.ok(calls[0].url.endsWith('/rampart/api/stats'), `请求地址不对：${calls[0].url}`)
+    assert.ok(calls[0].init.signal instanceof AbortSignal, '必须带可取消信号')
+  })
+})
+
+test('组件卸载时立刻取消在途请求，不等超时', async () => {
+  const exported = materialize()
+  await withGlobals(async ({ setFetch }) => {
+    let observed = null
+    setFetch((_url, init) => {
+      observed = init.signal
+      return new Promise(() => {})
+    })
+    const controller = new AbortController()
+    const pending = exported.fetchStats(controller.signal, 60_000)
+    // 让 fetch 先启动，再模拟卸载
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    controller.abort()
+    const started = Date.now()
+    assert.equal(await pending, null)
+    assert.ok(Date.now() - started < 500, '卸载后必须立刻返回，而不是等 60 秒超时')
+    assert.equal(observed?.aborted, true, '在途请求应当被 abort')
+  })
+})
+
+test('「释放内存」也受超时保护，卡住时按钮不会永远停在处理中', async () => {
+  const exported = materialize()
+  await withGlobals(async ({ setFetch }) => {
+    setFetch(() => new Promise(() => {}))
+    const result = await exported.requestGc(40)
+    assert.equal(result.ok, false, '超时必须回一个失败对象，好让界面收尾')
+    assert.match(result.error, /abort|timeout/i)
+  })
+})
+
+test('ensureStyles 在 HMR 后会用新内容替换旧样式标签，而不是「有就跳过」', () => {
+  const exported = materialize()
+  const tags = []
+  const original = { document: globalThis.document }
+  globalThis.document = {
+    querySelector: () => tags[0] ?? null,
+    createElement: () => ({ dataset: {}, textContent: '' }),
+    head: { appendChild: (tag) => tags.push(tag) },
+  }
+  try {
+    exported.ensureStyles()
+    assert.equal(tags.length, 1, '第一次应当插入一份')
+    const first = tags[0].textContent
+    // 模拟 HMR：标签还在，但内容已经过期
+    tags[0].textContent = 'stale'
+    exported.ensureStyles()
+    assert.equal(tags.length, 1, '不应重复插入标签')
+    assert.equal(tags[0].textContent, first, '过期内容必须被就地换回新 CSS')
+  } finally {
+    if (original.document === undefined) delete globalThis.document
+    else globalThis.document = original.document
+  }
+})

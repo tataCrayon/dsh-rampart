@@ -79,9 +79,21 @@ test('显式布尔开关不做隐式强转', () => {
   assert.equal(check({ denyHeavyOnWarn: 0 }).value.denyHeavyOnWarn, false, '非 true 值一律 false')
 })
 
-test('defaults 常量与实际默认值一致', () => {
+test('defaults 常量覆盖全部配置项，且与实际默认值一致', () => {
   const value = check({}).value
+  assert.deepEqual(
+    Object.keys(DEFAULTS).sort(),
+    Object.keys(value).sort(),
+    'DEFAULTS 漏了字段就说明它已经和真实默认值漂了',
+  )
   for (const [key, expected] of Object.entries(DEFAULTS)) {
     assert.deepEqual(value[key], expected, `${key} 默认值不一致`)
   }
+})
+
+test('DEFAULTS 是冻结的副本，改它不会污染后续校验', () => {
+  assert.throws(() => {
+    DEFAULTS.priority = 'unchanged'
+  }, TypeError)
+  assert.equal(check({}).value.priority, 'on-pressure')
 })

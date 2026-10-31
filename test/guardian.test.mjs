@@ -2,7 +2,7 @@
  * 运行时护栏的行为测试：用假的 win32 能力层驱动真实的 ResourceGuardian。
  *
  * 这里只验证「副作用是否可逆」与「门禁是否按等级动作」——Win32 真实调用
- * 由 `scripts/` 下的探针在真机上验证（`npm run probe:win32`）。
+ * 由 `scripts/` 下的探针在真机上验证（`npm run verify` 系列）。
  */
 
 import { test } from 'node:test'
@@ -274,4 +274,30 @@ test('GradeTracker 与 Guardian 共用同一套迟滞参数', () => {
   const tracker = new GradeTracker({ escalateSamples: 4, recoverSamples: 5 })
   assert.equal(tracker.escalateSamples, 4)
   assert.equal(tracker.recoverSamples, 5)
+})
+
+test('start 与 dispose 竞争：init 还没回来就被卸载，不得留下限制', async () => {
+  // 真实场景：HMR 热重载恰好落在插件首次加载的窗口里。早先的实现会在 dispose
+  // 之后继续往下跑，把优先级/亲和性按上去，而再没有人来撤 —— 「一切可逆」的
+  // 承诺在这里断掉。实测过一次（.scratch/probe-dispose-race.mjs）。
+  const win32 = fakeWin32()
+  const guardian = new ResourceGuardian({ config: config({ priority: 'below-normal' }), env: {} })
+  guardian.init = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    guardian.win32 = win32
+    return win32
+  }
+
+  const starting = guardian.start()
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  await guardian.dispose()
+  await starting
+
+  assert.equal(win32.state.priority, 0x20, '优先级不该被按下去')
+  assert.equal(win32.state.affinity, 0b1111_1111n, '亲和性也不该被改')
+  assert.deepEqual(
+    win32.calls.filter(([name]) => name === 'setPriority' || name === 'setAffinity'),
+    [],
+    '一次副作用调用都不该留下',
+  )
 })

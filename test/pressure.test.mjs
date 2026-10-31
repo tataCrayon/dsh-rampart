@@ -15,7 +15,6 @@ import {
   gradeOf,
   isHeavyTool,
   normalizeSnapshot,
-  toMb,
   wildcardToRegExp,
 } from '../lib/pressure.js'
 
@@ -37,12 +36,16 @@ function snap(availPhysMb, availCommitMb = 8192) {
   return normalizeSnapshot({ totalMb: 32768, availPhysMb, availCommitMb })
 }
 
-test('toMb：字节转 MB 向下取整，异常输入归零', () => {
-  assert.equal(toMb(1_048_576), 1)
-  assert.equal(toMb(1_048_575), 0)
-  assert.equal(toMb(0), 0)
-  assert.equal(toMb(-5), 0)
-  assert.equal(toMb(Number.NaN), 0)
+test('gradeOf：可用物理归零必须是最严重的 critical', () => {
+  // 早先的实现用 `phys > 0` 当「这一项拿得到」，于是物理内存真的归零时
+  // 判定反而退回 normal —— 最该拦的那一刻不拦。
+  assert.equal(gradeOf(snap(0, 0), THRESHOLDS), 'critical')
+})
+
+test('gradeOf：总量未知（读不到）时才算「拿不到」，不编造等级', () => {
+  const unknown = normalizeSnapshot({ availPhysMb: 0, availCommitMb: 0 })
+  assert.equal(unknown.totalMb, 0)
+  assert.equal(gradeOf(unknown, THRESHOLDS), 'normal')
 })
 
 test('normalizeSnapshot：按总量与可用量算出占用百分比', () => {

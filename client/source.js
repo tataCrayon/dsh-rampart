@@ -115,12 +115,23 @@ export function apiBase() {
 }
 
 /**
- * 注入样式（幂等：同 id 只插一次）。
+ * 注入样式（幂等：同 id 只插一次，内容变了就地更新）。
+ *
+ * ## 为什么不是「有就跳过」
+ *
+ * 因为 HMR。改样式时模块会重新求值、组件重新挂载，但上一份 `<style>` 标签还挂在
+ * `document.head` 里，而这里如果只判断「存在就 return」，改完 CSS 刷新页面**看不到
+ * 任何变化** —— 排查半天才发现是被旧标签顶了。所以存在时还要比对内容，不一样就换掉。
  * @returns {void}
  */
 export function ensureStyles() {
   if (typeof document === 'undefined') return
-  if (document.querySelector(`style[data-plugin-css="${STYLE_TAG_ID}"]`) !== null) return
+  const selector = `style[data-plugin-css="${STYLE_TAG_ID}"]`
+  const existing = document.querySelector(selector)
+  if (existing !== null) {
+    if (existing.textContent !== CSS) existing.textContent = CSS
+    return
+  }
   const tag = document.createElement('style')
   tag.dataset.plugin = 'dsh-rampart'
   tag.dataset.pluginCss = STYLE_TAG_ID
@@ -129,17 +140,74 @@ export function ensureStyles() {
 }
 
 /**
+ * 一次读数的最长等待时间（毫秒）。
+ *
+ * 轮询是「上一次拿到结果之后才排下一次」的自调度链（见 `StatusPill`），这样不会
+ * 堆积请求。代价是：**只要有一次 fetch 永不返回，整条链就停在那儿**，底栏从此
+ * 冻在最后一个数上，而且看不出是坏的。宿主重启、路由挂掉、代理吞掉连接都会这样。
+ */
+const FETCH_TIMEOUT_MS = 8000
+
+/**
+ * 带硬超时地拉一次 URL。
+ *
+ * 不直接用 `AbortSignal.timeout` + `AbortSignal.any`：那需要两个 API 都存在，
+ * 而且 `any` 缺失时还得退化 —— 三条路径里两条是死的。这里一个 controller
+ * 加一个定时器，所有浏览器都一样。
+ *
+ * ## 为什么还要 race 一次
+ *
+ * 光靠 `abort()` 只是**请求发出方的意图**：它保证不了对端一定把 promise 结掉。
+ * 宿主重启、连接被中间层吃掉、某些 fetch 实现忽略 signal 时，`await fetch(...)`
+ * 会一直悬着。而 `StatusPill` 的轮询是自调度链（拿到结果才排下一次），一次悬住
+ * 就是底栏永久冻死。所以这里不指望 fetch 守约：超时和外部取消都各自 reject
+ * 一个 promise，与 fetch 赛跑。
+ * @param {string} url 地址。
+ * @param {RequestInit} init 请求参数。
+ * @param {AbortSignal} [outer] 调用方信号（组件卸载时用它提前取消）。
+ * @param {number} [timeoutMs] 超时毫秒数，只给测试缩短用。
+ * @returns {Promise<Response>} 响应。
+ */
+async function fetchWithTimeout(url, init, outer, timeoutMs = FETCH_TIMEOUT_MS) {
+  const controller = new AbortController()
+  let timer
+  let onOuterAbort
+  const stopped = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort()
+      reject(new Error(`timeout after ${timeoutMs}ms`))
+    }, timeoutMs)
+    onOuterAbort = () => {
+      controller.abort()
+      reject(new Error('aborted'))
+    }
+    if (outer?.aborted === true) onOuterAbort()
+    else outer?.addEventListener('abort', onOuterAbort, { once: true })
+  })
+  // 输了比赛也要把这个 rejection 消化掉，否则未处理的 rejection 会冒到控制台。
+  stopped.catch(() => {})
+  try {
+    return await Promise.race([fetch(url, { ...init, signal: controller.signal }), stopped])
+  } finally {
+    clearTimeout(timer)
+    outer?.removeEventListener('abort', onOuterAbort)
+  }
+}
+
+/**
  * 拉一次读数。
- * @param {AbortSignal} signal 取消信号。
+ * @param {AbortSignal} [signal] 取消信号。
+ * @param {number} [timeoutMs] 超时毫秒数，只给测试缩短用。
  * @returns {Promise<object | null>} 读数；失败时 null。
  */
-export async function fetchStats(signal) {
+export async function fetchStats(signal, timeoutMs) {
   try {
-    const response = await fetch(new URL('rampart/api/stats', apiBase()).href, {
-      method: 'GET',
-      headers: { accept: 'application/json' },
+    const response = await fetchWithTimeout(
+      new URL('rampart/api/stats', apiBase()).href,
+      { method: 'GET', headers: { accept: 'application/json' } },
       signal,
-    })
+      timeoutMs,
+    )
     if (!response.ok) return null
     const payload = await response.json()
     return payload?.ok === true ? payload : null
@@ -150,15 +218,19 @@ export async function fetchStats(signal) {
 
 /**
  * 触发一次「释放内存」。
+ * @param {number} [timeoutMs] 超时毫秒数，只给测试缩短用。
  * @returns {Promise<object>} 结果（失败也返回对象，便于直接显示）。
  */
-export async function requestGc() {
+export async function requestGc(timeoutMs) {
   try {
-    const response = await fetch(new URL('rampart/api/gc', apiBase()).href, {
-      method: 'POST',
-      headers: { accept: 'application/json' },
-      body: '',
-    })
+    // GC 要等同步回收跑完才返回，可以慢，但不能没有上限：一个卡住的请求会让
+    // 按钮永远停在「处理中」。
+    const response = await fetchWithTimeout(
+      new URL('rampart/api/gc', apiBase()).href,
+      { method: 'POST', headers: { accept: 'application/json' }, body: '' },
+      undefined,
+      timeoutMs,
+    )
     return await response.json()
   } catch (error) {
     return { ok: false, error: String(error) }

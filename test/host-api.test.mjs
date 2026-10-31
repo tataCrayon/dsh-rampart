@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { TreeSampler } from '../lib/host-api.js'
+import { ROUTE_PREFIX, TreeSampler, createStatsHandler } from '../lib/host-api.js'
 
 /**
  * 造一个能力集合，并记录被真实枚举了几次。
@@ -97,4 +97,73 @@ test('取能力集合时抛错也不留下 inflight', async () => {
   })
   assert.equal(await sampler.sample(), null)
   assert.equal(sampler.inflight, null)
+})
+
+/**
+ * 造一个只记录「写了什么状态码」的假响应。
+ * @returns {{res: object, read: () => {status: number, body: any}}} 假响应与读数。
+ */
+function fakeRes() {
+  const seen = { status: 0, body: null }
+  return {
+    res: {
+      writeHead: (status) => {
+        seen.status = status
+      },
+      end: (body) => {
+        seen.body = JSON.parse(body)
+      },
+    },
+    read: () => seen,
+  }
+}
+
+/**
+ * 造一个最小可用的路由处理器。
+ * @param {object} [overrides] 覆盖项。
+ * @returns {(req: object, res: object) => Promise<void>} 处理器。
+ */
+function handler(overrides = {}) {
+  return createStatsHandler({
+    sampler: { sample: async () => null },
+    guard: () => ({ grade: 'normal' }),
+    heap: () => ({ heapUsedMb: 1 }),
+    collect: () => ({ ok: true }),
+    ...overrides,
+  })
+}
+
+test('/stats 只接受 GET：POST 会被 405 挡住，也不会触发整表枚举', async () => {
+  let sampled = 0
+  const handle = handler({ sampler: { sample: async () => {
+    sampled += 1
+    return null
+  } } })
+  const { res, read } = fakeRes()
+  await handle({ method: 'POST', url: `${ROUTE_PREFIX}/stats`, socket: {} }, res)
+  assert.equal(read().status, 405)
+  assert.equal(sampled, 0, '被挡住的请求不该真的去枚举进程')
+})
+
+test('/gc 只接受 POST：GET 会被 405 挡住，也不会真的 GC', async () => {
+  let collected = 0
+  const handle = handler({ collect: () => {
+    collected += 1
+    return { ok: true }
+  } })
+  const { res, read } = fakeRes()
+  await handle({ method: 'GET', url: `${ROUTE_PREFIX}/gc`, socket: {} }, res)
+  assert.equal(read().status, 405)
+  assert.equal(collected, 0, 'GET 不该触发一次全量 GC')
+})
+
+test('未知路径统一 404，且不影响合法路径', async () => {
+  const { res, read } = fakeRes()
+  await handler()({ method: 'GET', url: `${ROUTE_PREFIX}/nope`, socket: {} }, res)
+  assert.equal(read().status, 404)
+
+  const ok = fakeRes()
+  await handler()({ method: 'GET', url: `${ROUTE_PREFIX}/stats`, socket: {} }, ok.res)
+  assert.equal(ok.read().status, 200)
+  assert.equal(ok.read().body.ok, true)
 })
