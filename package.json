@@ -90,6 +90,7 @@
     "soak": "node --expose-gc scripts/soak.mjs",
     "preview": "node scripts/preview-panel.mjs",
     "launch": "node scripts/launch.mjs",
+    "publish:token": "node scripts/publish-with-token.mjs",
     "prepublishOnly": "npm run build:client && npm test && npm run soak"
   },
   "dsh": {

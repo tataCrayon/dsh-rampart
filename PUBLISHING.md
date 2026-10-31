@@ -93,6 +93,65 @@ npm publish                     # prepublishOnly 会自动 build:client + test
 npm view dsh-rampart version    # 确认
 ```
 
+### 3.1 如果 `npm login` 的浏览器那一步打不开（本机 2026-10-31 实测）
+
+先分清**卡在哪一段**，三处端点是独立的，混在一起就会误判成「npm 全被墙了」：
+
+| 端点 | 用途 | 本机实测 |
+|---|---|---|
+| `registry.npmjs.org` | 一切读写（含 publish、CLI 全部请求） | **200，240~850 ms** |
+| `www.npmjs.com` | 只有「人在浏览器里点授权」这一步 | **403，`cf-mitigated: challenge`** |
+| `registry.npmjs.org/-/user/org.couchdb.user:*` | legacy 登录 | **401 + `WWW-Authenticate: OTP`**（活着） |
+
+判定方法（不用登录，30 秒出结果）：
+
+```powershell
+npm ping                                    # 200/PONG → registry 通
+npm publish --dry-run=false --//registry.npmjs.org/:_authToken=fake
+# 报 E404/E401（服务端返回）→ 网络通，只差真 token
+# 报 ECONNREFUSED/ETIMEDOUT  → 才是网络问题
+```
+
+**关键事实**：`npm login --auth-type=web` 的 CLI **自己从不访问 `www.npmjs.com`**。
+它向 registry 要一对 URL，把 `https://www.npmjs.com/login?next=/login/cli/<uuid>` 打给人看，
+然后**轮询 registry 上的 `doneUrl`** 拿 token（源码：`npm-profile/lib/index.js:39-95`）。
+被 Cloudflare managed challenge 挡住的是**浏览器那一步**，不是 CLI。
+
+所以有两条互不依赖的路：
+
+**路 A：在别处建一个 token（本机全程不需要 `www.npmjs.com`）**
+
+token 可以在手机、另一台机器、或任何能过 Cloudflare 的浏览器里建
+（npm 网站 → Access Tokens → Generate → **Granular**，`Read and write` + `All packages`），
+然后：
+
+```powershell
+$env:NPM_TOKEN = 'npm_xxxxxxxxxxxx'
+node scripts/publish-with-token.mjs
+```
+
+这个脚本不写 `.npmrc`、不落盘，token 只在本次进程里用；它先 `whoami` 验身份，
+好把「网络不通」和「token 不对」分开报（已用假 token 验证会正确报 `token 无效`）。
+
+**路 B：换一个能过挑战的网络去点那一下**
+
+`www.npmjs.com` 的 403 是 Cloudflare 的人机校验，datacenter/共享出口 IP 很容易被挑中
+（本机走直连与走 7897 代理都 403，落点先是 LAX 后是 HKG）。换手机热点、换家宽、
+或换一个住宅 IP 出口的节点，通常就过了。真实浏览器窗口里一般能自动通过。
+
+**不要做的三件事**：
+
+- ❌ **把 registry 换成 `registry.npmmirror.com`**：它是只读镜像，`PUT` 返回 **422**，发不出去。
+- ❌ **发到 GitHub Packages**：用户 `npm i dsh-rampart` 装不到，得额外配 scope + registry + 凭证。
+- ❌ **改依赖里的 GitHub 地址**：本项目 `dependencies` 是**空的**，只有一个 peer
+  `@deepseek-ai/cordis`，全仓没有任何 `git@` / `github:` 形态的依赖。
+  `url."https://github.com/".insteadOf git@github.com:` 这类配置对本仓**零影响** ——
+  这里根本没有 GitHub 依赖可切换，它解决的是另一类问题（`npm install` 拉 git 依赖超时）。
+
+**首次发布之后**就可以不再碰 token：在 npm 网站给包配 **Trusted Publishing**（GitHub OIDC），
+之后 `.github/workflows/` 里的 `npm publish` 走 OIDC 免密钥。
+但它要求**包已经存在**才能配，所以首发这一步绕不开 token。
+
 发布前自检（**必须全绿**，`npm publish` 也会跑一遍）：
 
 ```powershell
