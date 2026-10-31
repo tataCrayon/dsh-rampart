@@ -1,0 +1,19 @@
+# 市场条目：提到 awesome-dsh-plugin/awesome-dsh-plugin
+#
+# 这**不是**本插件的配置文件，是投稿文件的存底。提交时把它复制到那个仓库的
+# `data/plugins/tataCrayon__dsh-rampart.yml`，一个文件就是全部投稿。
+#
+# 已核对 contributing.md（2026-10-31）：
+#   - 只有 description.en 是必填；zh 可选，缺了维护者会补
+#   - category 必须在允许集合内（这里是 dev，与 dsh-memory-guard /
+#     dsh-memory-watchdog / dsh-concurrency-guard 同类）
+#   - 描述含 ": " 必须加引号，否则 YAML 解析成嵌套键
+#   - icon 必须是 GitHub 托管的位图（png/jpg/jpeg/webp），SVG 和第三方图床会被拒
+#   - 仓库需创建满 1 天（本仓库 2026-10-31 07:32:50Z 建，满 24h 是 11-01 15:32 北京时间）
+url: https://github.com/tataCrayon/dsh-rampart
+name: tataCrayon/dsh-rampart
+category: dev
+description:
+  en: 'Grades whole-machine memory and CPU pressure and refuses heavy tools (shell, workflow, subagent) before the machine thrashes, and shows in the composer how much of it dsh itself is using.'
+  zh: '按整机内存/CPU 压力分级，到线就拦重活（shell、workflow、subagent），并在输入框旁显示 DSH 自己占用了整机多少资源。'
+icon: https://raw.githubusercontent.com/tataCrayon/dsh-rampart/master/assets/icon-180.png
