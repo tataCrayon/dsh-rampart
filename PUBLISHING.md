@@ -45,9 +45,10 @@
 - [x] `dsh.bundle.patch` + `cordis.patch.yml` + `dsh.client` 三件套齐
 - [x] `LICENSE`（MIT）、`assets/icon-180.png`（市场卡片图标）、`assets/icon-1024.png`（宣传图）
 - [x] GitHub 仓库 `tataCrayon/dsh-rampart` 已建，`dsh-plugin` 等 topic 已打
-- [x] **代码已推到 master**，`6d6f7a08454ba9a4ca1faa47141bfbcfa5b471db`
-- [x] 82 条单测全绿（`npm test`）；`npm run verify:pill` 与 `verify:profile` 全 PASS
-- [x] `npm publish --dry-run` 通过：20 个文件、67.7 kB 包、181.3 kB 解包（不含 `.scratch/`）
+- [x] **代码已推到 master**，`c89453d2eaa38ed116dd7d5b3c1184bfa3d380c3`
+- [x] 93 条单测全绿（`npm test`）；`npm run verify` 四条全 PASS、
+      `verify:pill` 与 `verify:profile` 全 PASS
+- [x] `npm publish --dry-run` 通过：20 个文件、72.5 kB 包、192.9 kB 解包（不含 `.scratch/`）
 
 **还差两步**：发到 npm、提市场条目。下面逐步给命令。
 
@@ -100,7 +101,7 @@ npm test
 npm pack --dry-run              # 看一眼真的会打包哪些文件
 ```
 
-本次实测的 `npm pack --dry-run`：**20 个文件、61.2 kB**。
+本次实测的 `npm pack --dry-run`：**20 个文件、72.5 kB 包 / 192.9 kB 解包**。
 
 `package.json` 的 `files` 已收敛：只带 `lib/`、`client/source.js`、`cordis.patch.yml`、
 启动壳的三个文件、`assets/icon-180.png`、`README.md`、`LICENSE`。
