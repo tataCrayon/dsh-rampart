@@ -16,7 +16,7 @@ export interface StatusPillProps {
   t?: (key: string) => string
 }
 
-/** 宿主 `/resource-guard/api/stats` 的响应。 */
+/** 宿主 `/rampart/api/stats` 的响应。 */
 export interface StatsPayload {
   ok: true
   at: number

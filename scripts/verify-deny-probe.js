@@ -14,7 +14,7 @@ import { existsSync, rmSync, writeFileSync } from 'node:fs'
 const OUT = 'D:/Projects/MyProjects/dsh-resource-guard/.verify/deny-result.json'
 const MARKER = 'D:/Projects/MyProjects/dsh-resource-guard/.verify/deny-marker.txt'
 
-export const name = 'resource-guard-deny-probe'
+export const name = 'rampart-deny-probe'
 export const inject = ['tools']
 
 /**

@@ -18,7 +18,7 @@ import { dirname } from 'node:path'
 
 const OUT = 'D:/Projects/MyProjects/dsh-resource-guard/.verify/desktop-live.json'
 
-export const name = 'resource-guard-desktop-probe'
+export const name = 'rampart-desktop-probe'
 export const inject = ['tools']
 
 /**

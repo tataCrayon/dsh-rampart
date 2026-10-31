@@ -23,7 +23,7 @@ import { dirname, join } from 'node:path'
 const ROOT = dirname(import.meta.dirname)
 
 /** 打包 id：必须与 package.json 的 name 一致（serve 层按它拼 `/plugins/<id>/client.js`）。 */
-export const BUNDLE_ID = 'dsh-resource-guard'
+export const BUNDLE_ID = 'dsh-rampart'
 
 /**
  * 把源码里的 `import ... from 'x'` 收集出来。

@@ -57,7 +57,7 @@ function materialize() {
 }
 
 test('bundle 的 id 与包名一致（serve 层按它拼 /plugins/<id>/client.js）', () => {
-  assert.equal(loadBundle().id, 'dsh-resource-guard')
+  assert.equal(loadBundle().id, 'dsh-rampart')
 })
 
 test('factory 是函数，且只在 factory 里碰 react（顶层不许有副作用）', () => {
@@ -103,7 +103,7 @@ test('注册进 conversation.composer.dock，且 id 不与内置的 activity / u
   assert.equal(registrations.length, 1, '应当只注册一个条目')
   const [{ options, component }] = registrations
   assert.equal(options.name, 'conversation.composer.dock')
-  assert.equal(options.id, 'resource-guard')
+  assert.equal(options.id, 'rampart')
   assert.ok(options.order >= 2, '必须排在 activity(0) / usage(1) 之后')
   assert.equal(options.locale, 'guard')
   assert.equal(typeof component, 'function')
@@ -115,8 +115,8 @@ test('读数是同源相对路径，不是宿主绝对地址', () => {
   const exported = materialize()
   // apiBase 在非 DOM 环境下返回空串，路由拼出来必须仍是相对路径
   const source = readFileSync(new URL('../client/source.js', import.meta.url), 'utf8')
-  assert.ok(source.includes("new URL('resource-guard/api/stats', apiBase())"), '必须用相对路径拼路由')
-  assert.ok(source.includes("new URL('resource-guard/api/gc', apiBase())"), 'GC 路由同样必须是相对路径')
+  assert.ok(source.includes("new URL('rampart/api/stats', apiBase())"), '必须用相对路径拼路由')
+  assert.ok(source.includes("new URL('rampart/api/gc', apiBase())"), 'GC 路由同样必须是相对路径')
   assert.ok(!/https?:\/\/127\.0\.0\.1/.test(source), '不允许硬编码宿主地址（会跨源被拦）')
 
   // 注释里提到 streamBaseUrl 是在解释「为什么不用它」，所以只查代码行
@@ -134,11 +134,13 @@ test('读数是同源相对路径，不是宿主绝对地址', () => {
   assert.equal(exported.formatMb(0), '—')
 })
 
-test('面板有两条带语义的用量条（IDEA 式），且行标记不用 dl/dt/dd', () => {
+test('面板的用量条是「一根条多段占比」，且行标记不用 dl/dt/dd', () => {
   const exported = materialize()
-  assert.ok(exported.CSS.includes('.RGpill_meter{'), '必须有用量条轨道样式')
-  assert.ok(exported.CSS.includes('.RGpill_meterFill'), '必须有填充样式')
-  assert.ok(exported.CSS.includes('.RGpill_meterFill.RGpill_warn'), '堆用量偏高时应当能转警示色')
+  assert.ok(exported.CSS.includes('.RGpill_bar{'), '必须有占比条轨道样式')
+  assert.ok(exported.CSS.includes('.RGpill_seg'), '必须有分段填充样式')
+  assert.ok(exported.CSS.includes('.RGpill_tintDsh'), 'DSH 那一段必须有独立色（蓝）')
+  assert.ok(exported.CSS.includes('.RGpill_tintUsed'), '「其他已用」必须有灰段')
+  assert.ok(exported.CSS.includes('backdrop-filter:var(--dsw-menu-backdrop-filter)'), '面板必须有毛玻璃底衬，否则半透明底会透出正文')
 
   const source = readFileSync(new URL('../client/source.js', import.meta.url), 'utf8')
   // 无障碍：进度条要有 role 与 aria-valuenow，否则读屏软件只能念一个空 div
@@ -150,7 +152,30 @@ test('面板有两条带语义的用量条（IDEA 式），且行标记不用 dl
   assert.ok(!source.includes("jsx('dt'"), '不要用 dt')
   assert.ok(!source.includes("jsx('dd'"), '不要用 dd')
 
-  // 两条条的分母必须显式给出：只画进度条不写总量等于没说
-  assert.ok(source.includes('guard.meterTree'), '必须有「DSH 占用 / 整机物理」这条')
+  // 三条条的分母必须显式给出：只画进度条不写总量等于没说
+  assert.ok(source.includes('guard.meterMemory'), '必须有整机物理内存这条')
+  assert.ok(source.includes('guard.meterCpu'), '必须有整机 CPU 这条')
   assert.ok(source.includes('guard.meterHeap'), '必须有「JS 堆 / 堆上限」这条')
+})
+
+test('DSH 占用与整机用量画进同一根条，且 DSH 段不与「已用」重复计', () => {
+  const exported = materialize()
+
+  // 百分比不能夹成整数：0.4% 的 DSH 占用会被丢成 0 段
+  assert.equal(exported.shareOf(140, 32000), 0.4)
+  assert.equal(exported.shareOf(32000, 32000), 100)
+  assert.equal(exported.shareOf(1, 0), 0, '总量为 0 时不能除零')
+
+  const source = readFileSync(new URL('../client/source.js', import.meta.url), 'utf8')
+  // 内存：DSH 先夹进「整机已用」，再算「其他已用」，避免同一段被算两次
+  assert.ok(source.includes('Math.min(dshMb ?? 0, usedPhysMb)'), 'DSH 占用必须先夹进整机已用')
+  assert.ok(source.includes('usedPhysMb - dshPhysMb'), '「其他已用」必须是已用减 DSH')
+  // CPU：同理，DSH 忙不能超过整机忙
+  assert.ok(source.includes('Math.min(busyPercent, tree?.treePercent ?? 0)'), 'DSH CPU 必须先夹进整机忙')
+})
+
+test('读数条挪到上下文占用环右边（靠 CSS order，不是 slot order）', () => {
+  const exported = materialize()
+  assert.ok(exported.CSS.includes('.RGpill_anchor{order:1'), '上下文环是 InputBar 硬编码在 dock 末尾的，只能用 CSS order 越过它')
+  assert.ok(exported.CSS.includes('display:inline-flex'), '根节点必须是 flex item，否则 order 不生效')
 })

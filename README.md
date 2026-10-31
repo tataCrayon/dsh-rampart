@@ -1,6 +1,9 @@
-﻿# dsh-resource-guard
+# dsh-rampart
 
 给 DeepSeek Harness 加一层**内存/CPU 压力护栏**：机器快被吃穿时先踩刹车，而不是等它卡死。
+
+> **rampart** = 城墙的外围防御墙。采样压力、到线就拦重活、把宿主降到 below-normal ——
+> 都是在机器被压垮之前筑一道墙。
 
 两层，各管一件事：
 
@@ -9,8 +12,16 @@
 | **插件**（软） | 采样可用内存 → 分 normal/warn/critical → 降优先级、钉核、拦重活、给模型读数据 | `lib/` |
 | **启动壳**（硬） | 给整棵 Electron 进程树套 Job Object 内存硬顶，撞上就被系统拒绝 | `scripts/launch.mjs` |
 
-外加**输入框下方的一条读数**（`CPU 12% · DSH 1.2 GB`），点开是 IDEA 式的详情面板，
-带一个「释放内存」按钮。数据不走模型，是浏览器直接打宿主路由取的本机读数。
+外加**输入框下方的一条读数**（`CPU 12% · DSH 1.2 GB`），排在 DSH 自己的上下文占用环
+**右边**；点开是面板，用一根分段占比条回答「整机被谁吃了」，带一个「释放内存」按钮。
+数据不走模型，是浏览器直接打宿主路由取的本机读数。
+
+```powershell
+dsh plugin --profile web add dsh-rampart
+```
+
+> ⚠️ 与 npm 上已存在的 `dsh-resource-guard`（另一个作者的本地模型内存信号量插件）
+> **不是同一个东西**。本插件原名就是那个，为避让而改名。
 
 ---
 
@@ -45,7 +56,7 @@
 ```powershell
 # 1) 把本目录链进 profile 的 node_modules
 $profile = "D:\Users\zigang.wang\.dsh\profiles\desktop"
-cmd /c mklink /J "$profile\node_modules\dsh-resource-guard" "D:\Projects\MyProjects\dsh-resource-guard"
+cmd /c mklink /J "$profile\node_modules\dsh-rampart" "D:/Projects/MyProjects/dsh-resource-guard"
 
 # 2) 在 profile patch 里插一行（desktop profile 的这一行已存在，追加到末尾即可）
 ```
@@ -54,8 +65,8 @@ cmd /c mklink /J "$profile\node_modules\dsh-resource-guard" "D:\Projects\MyProje
 
 ```yaml
 - insert:
-    - id: resource-guard
-      name: 'dsh-resource-guard'
+    - id: rampart
+      name: 'dsh-rampart'
 ```
 
 桌面的 HMR 会监听 `cordis.patch.yml`，**保存后约 2 秒自动重组，不用重启应用**。
@@ -64,7 +75,7 @@ cmd /c mklink /J "$profile\node_modules\dsh-resource-guard" "D:\Projects\MyProje
 
 ```yaml
 - insert:
-    - id: resource-guard
+    - id: rampart
       name: 'file:///D:/Projects/MyProjects/dsh-resource-guard/lib/index.js'
 ```
 
@@ -74,7 +85,7 @@ DSH 自带的 `dsh-win32-process` 与 `koffi`；找不到就退化为纯观测�
 ### 启动壳（想要硬顶才需要）
 
 ```powershell
-cd D:\Projects\MyProjects\dsh-resource-guard
+cd D:/Projects/MyProjects/dsh-resource-guard
 node scripts\launch.mjs --dry-run          # 先看会施加多少
 node scripts\launch.mjs                    # 默认按总内存 55% 给硬顶（本机 32 GB → 17810 MB）
 node scripts\launch.mjs --cap 12000 --low-priority
@@ -99,7 +110,7 @@ node scripts\launch.mjs --cap 12000 --low-priority
 | `limitCores` | 0 | 钉住核数；0 = 不动亲和性 |
 | `heavyTools` | pwsh/bash/shell/workflow/subagent/subagent_fork/send_message/web_fetch/web_search | 精确名单 |
 | `heavyPatterns` | `['job_*']` | 通配名单 |
-| `showStatusPill` | `true` | 是否挂输入框下方的读数条 + `/resource-guard/api/*` 路由 |
+| `showStatusPill` | `true` | 是否挂输入框下方的读数条 + `/rampart/api/*` 路由 |
 | `statusPillIntervalMs` | 2000 | 读数条轮询间隔；低于 500 会被夹到 500 |
 
 **为什么默认值这么保守**：本机实测物理 32 GB、可用长期 2.7~3.3 GB（约 9%），提交内存同量级。
@@ -141,20 +152,53 @@ node scripts\launch.mjs --cap 12000 --low-priority
 
 ---
 
-## 底栏读数条（IDEA 那套）
+## 输入框下方那条读数
 
-输入框下面，跟着 DSH 自己的 `154 tok/s`、`缓存命中 49%` 并排放一条：
+排在 DSH 自己的 `154 tok/s`、`缓存命中 49%`、上下文占用环**之后**：
 
 ```
-CPU 12% · DSH 1.2 GB
+154 tok/s · 缓存命中 49% · 38% · CPU 12% · DSH 1.2 GB
 ```
 
 - **normal** → 灰色（与内置统计条同一个 tertiary 前景色）
 - **warn** → 变警示色
 - **critical** → 前置一个实心点 + 警示色
 
-点开是面板：整机可用物理/提交、整机 CPU、DSH 进程树（进程数 + 提交量 + CPU 占比）、
-已拦/降速计数、本进程 JS 堆，以及一个 **「释放内存」** 按钮。
+> **为什么「排在上下文环右边」要靠 CSS 而不是 `order` 选项**：上下文环比 slot 更硬 ——
+> 它是 `InputBar` 在 dock 末尾**硬编码**渲染的，不在 `conversation.composer.dock` 里，
+> 所以 slot 的 `order` 管不到它。dock 是 flex 容器、slot 外壳是 `display:contents`，
+> 我们的根 `<span>` 因此是 dock 的直接 flex item —— 给它 `order:1` 就落到默认 0 的环之后。
+> 这个结论来自读 `dsh-client-ui-conversation` 的 bundle，不是猜的。
+
+点开是面板。**面板底与上下文面板完全同源**：`--dsw-specific-menu`（半透明）+
+`backdrop-filter: var(--dsw-menu-backdrop-filter)` + `--dsw-elevation-stroke-color` 让阴影带描边 ——
+和 DSH 自己的上下文 / 统计 / todo 三块面板是同一组声明。只写 `background` 不写
+`backdrop-filter` 会直接透出下面的对话文字，读数根本看不清（这就是上一版的问题）。
+
+### 面板里的条：一根条回答「整机被谁吃了」
+
+不是「DSH 一条、整机一条」两条并列 —— 那会让人以为是两件独立的事，而它们其实是
+**同一根尺子上的三段**：
+
+```
+整机物理内存            18.4 GB / 31.6 GB · 58%
+████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+● DSH 5.1 GB   ● 其他已用 13.3 GB   ● 空闲 13.2 GB
+```
+
+- **蓝 = DSH 在用**（`--dsw-static-blue-450`，与 DSH 上下文面板同一个蓝）
+- **灰 = 已经用掉、不可用**（`--dsw-static-neutral-bluish-400`）
+- **留白 = 还能再吃**
+
+整机 CPU 同理：`DSH 忙 / 其他忙 / 空闲`，分母是「所有逻辑核跑满」。
+本进程 JS 堆单独一条（它有自己的上限，不是整机的分母）。
+
+两个防错细节，都是踩出来的：
+
+1. **百分比不夹成整数**（`shareOf` 保留一位小数）。0.4% 的 DSH 占用夹成 0 会被
+   `filter(share > 0)` 整段丢掉 —— 「DSH 在用」这件事在图里直接消失，而它恰恰最该被看见。
+2. **DSH 段先夹进整机已用再算「其他」**。DSH 的提交量可能**大于**整机已用物理
+   （有换页、有共享页），不夹的话蓝色会溢出轨道，「其他已用」还会变成负数。
 
 ### 两个数分别是什么
 
@@ -178,7 +222,7 @@ CPU 12% · DSH 1.2 GB
 ### 数据怎么到浏览器
 
 ```
-浏览器 ──GET /resource-guard/api/stats──▶ 宿主 webServer 路由 ──▶ GetSystemTimes / Toolhelp32 / GetProcessMemoryInfo
+浏览器 ──GET /rampart/api/stats──▶ 宿主 webServer 路由 ──▶ GetSystemTimes / Toolhelp32 / GetProcessMemoryInfo
         ◀── { grade, guard, heap, tree } ──
 ```
 
@@ -208,11 +252,11 @@ CPU 12% · DSH 1.2 GB
 
 ## 实测证据
 
-### 单元 / 集成测试（70 条全绿）
+### 单元 / 集成测试（72 条全绿）
 
 ```powershell
 npm test
-# ℹ tests 70  ℹ pass 70  ℹ fail 0
+# ℹ tests 72  ℹ pass 72  ℹ fail 0
 ```
 
 覆盖：阈值分级、迟滞、重活判定、决策、配置校验、优先级/亲和性的**可逆性**、
@@ -231,23 +275,31 @@ npm run verify
 
 ```powershell
 npm run verify:profile
-# [deny-probe] heavy isError=true marker=false
-# steps[0].errorCode = RESOURCE_GUARD_DENIED
-# steps[1].name = resource_guard（读得到 grade=critical 与 deniedCalls=1）
+# PASS: 插件已以包名挂进 profile node_modules（dsh-rampart）
+# PASS: 探针在真实 composition 里执行了
+# PASS: pwsh 被拒绝（isError）
+# PASS: 错误码为 RESOURCE_GUARD_DENIED
+# PASS: pwsh 的副作用没有发生（标记文件不存在）
+# PASS: 返回了压力等级（critical，钉死阈值后必须是 critical）
+# PASS: 计数被拦次数（1）
 ```
 
 即：headless profile 真加载插件 → 真调 `pwsh` → 被拦 → **命令的副作用文件确实没被创建**。
+
+> 这条验收以前是**随机通过**的：它用「按本机实测调的」阈值，机器空闲时等级就是 `normal`，
+> 门禁根本不触发。现在阈值钉成不可能达到的值，`critical` 是确定状态。
+> 教训：**验收里的输入必须钉死，不能跟着环境走**。
 
 ### 底栏读数条（真 web 服务，隔离 profile）
 
 ```powershell
 npm run verify:pill
-# PASS: boot 图里有 dsh-resource-guard/client.js
+# PASS: boot 图里有 dsh-rampart/client.js
 # PASS: combo 脚本可下载（实际 200）
 # PASS: 下载到的字节里有我们的 CSS 类名
-# PASS: GET /resource-guard/api/stats → 200（应当 200）
+# PASS: GET /rampart/api/stats → 200（应当 200）
 # PASS: 带压力等级（normal）/ Win32 能力层可用 / 整树提交量有值（408 MB）
-# PASS: POST /resource-guard/api/gc 回收成功（freed 66.7 MB）
+# PASS: POST /rampart/api/gc 回收成功（freed 66.7 MB）
 # PASS: 不带 cookie → 403（围栏生效而不是路由缺失）
 ```
 
@@ -277,6 +329,12 @@ npm run verify:pill
 | 客户端 `fetch` 报 `Failed to fetch` | 宿主路由明明在，浏览器就是打不通 | 桌面 shell 的页面是 `dsh-app://app/`。用宿主真实地址（`streamBaseUrl`）就是跨源，而插件路由不发 CORS 头。必须用**页面同源的相对路径** |
 | 路由返回 400 而不是 404/403 | 看起来像路径写错 | 在 `trustOf` 里直接写 `ctx.connection` —— cordis 里**访问未声明服务的属性本身会抛**，被 webserver 统一转成 400。要用 `ctx.get('connection')` 并包在 try 里 |
 | 改了插件的 `lib/*.js` 却像没生效 | HMR 没反应 | HMR 只监视 profile 的 `cordis.patch.yml` / `package.json`。改插件代码后要 touch 一下 patch 才会重新 `import` |
+| 面板半透明、读数看不清 | 数字后面透出对话正文 | `--dsw-specific-menu` 本身是半透明的（浅色 `#f8f9fa94` / 深色 `#43454a73`）。只写 `background` 不够，必须同时给 `backdrop-filter: var(--dsw-menu-backdrop-filter)` —— DSH 自己那三块面板都这么写 |
+| 读数值想着「排在上下文环右边」，改 `order` 没用 | 还是在最左边 | 上下文环**不经过 slot**，是 `InputBar` 在 dock 末尾硬编码渲染的。slot 的 `order` 只在 slot 内部排序；要越过它得给自己加 CSS `order`（slot 外壳是 `display:contents`，我们的根节点就是 dock 的 flex item） |
+| DSH 的占比在图上「消失」 | 明明在用，条里看不见蓝 | 百分比被夹成整数：0.4% → 0 → 被 `filter(share > 0)` 丢掉。占比要保留一位小数 |
+| 「其他已用」算出负数 | 蓝段溢出轨道 | DSH 的提交量可能**大于**整机已用物理（换页 / 共享页）。必须先把 DSH 夹进「整机已用」，再算「其他 = 已用 − DSH」 |
+| 验收脚本「全 PASS 却退出码 1」 | PowerShell 把 stderr 当失败 | `spawnSync(cmd, args, { shell: true })` 会发 DEP0190 警告到 stderr。改成把整条命令行交给 ComSpec、参数数组留空 |
+| 门禁验收**随机**通过或失败 | 机器空闲时等级是 normal | 阈值跟着本机实测内存走，护栏就不触发。**验收的输入要钉死**：设成不可能达到的值，`critical` 才是确定状态 |
 
 ---
 
@@ -289,18 +347,22 @@ lib/win32.js       Win32 能力层：内存读数、优先级、亲和性、冻�
 lib/config.js      StandardSchemaV1 配置校验
 lib/index.js       插件入口：pre-execute 门禁 + resource_guard 工具 + 读数路由
 lib/tree-stats.js  整树读数：Toolhelp 枚举、按提交量求和、CPU 按 GetSystemTimes 差值算
-lib/host-api.js    /resource-guard/api 的 HTTP 处理器（stats / gc / 404 / 405）
+lib/host-api.js    /rampart/api 的 HTTP 处理器（stats / gc / 404 / 405）
 lib/gc.js          本进程 V8 堆的强制回收（不需要 --expose-gc 启动参数）
-client/source.js   浏览器半边：底栏读数条 + IDEA 式面板（ESM 源码，人读的那份）
+client/source.js   浏览器半边：读数条 + 分段占比面板（ESM 源码，人读的那份）
 lib/client.js      上面那份经 scripts/build-client.mjs 机械转换后的产物（serve 层加载这个）
 scripts/build-client.mjs 只改 import/export 的构建脚本，转完会跑一次真语法校验
+scripts/make-icon.py 生成 assets/icon-{1024,180}.png（深蓝底 + 白色城垛）
 scripts/launch.mjs 启动壳 CLI
 scripts/launcher.mjs 启动壳实现（Job 整树硬顶）
-scripts/verify-*.mjs 真机验收（可逆性 / Job 内核语义 / 启动壳 / 真 profile / 底栏读数条）
-scripts/verify-deny-probe.js 只在 .verify profile 里挂载的探针
+scripts/verify-*.mjs 真机验收（可逆性 / Job 内核语义 / 启动壳 / 真 profile / 读数条）
+scripts/*-probe.js 只在 .verify profile 里挂载的探针
 scripts/probe-*.cjs 一次性诊断探针（错误码、偏移量），留着是因为它们是那些教训的证据
-test/              70 条（pressure 19 / tree-stats 16 / guardian 14 / config 10 / integration 5 / client 契约 6）
+test/              72 条（pressure 19 / tree-stats 16 / guardian 14 / config 10 / integration 5 / client 契约 8）
 ```
+
+发布相关的信息（命名取舍、npm/GitHub/市场三处各要什么、格式 1 索引示例）见
+[`PUBLISHING.md`](PUBLISHING.md)。
 
 ## 一个必须改的地方：重活名单
 
@@ -308,8 +370,8 @@ test/              70 条（pressure 19 / tree-stats 16 / guardian 14 / config 1
 判断标准是「会不会拉子进程或扇出并发」。如果你的常用流程里有某个被误伤，在 patch 里覆盖：
 
 ```yaml
-- id: resource-guard
-  name: 'dsh-resource-guard'
+- id: rampart
+  name: 'dsh-rampart'
   config:
     heavyTools: ['pwsh', 'bash']
     heavyPatterns: []

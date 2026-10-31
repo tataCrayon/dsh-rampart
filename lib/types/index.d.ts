@@ -4,7 +4,7 @@
  */
 
 /** 插件名，cordis 用它做 fiber 诊断与日志名。 */
-export declare const name: 'resource-guard'
+export declare const name: 'rampart'
 
 /** 依赖的服务：只要求 tools。 */
 export declare const inject: readonly ['tools']

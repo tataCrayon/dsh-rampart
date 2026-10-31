@@ -1,5 +1,5 @@
 # 本插件的组合层：往 profile 里插一行。
 # 与官方 bundle 的写法一致（见 dsh-repeat-tool-reminder / dshmarket 的 patch）。
 - insert:
-    - id: resource-guard
-      name: 'dsh-resource-guard'
+    - id: rampart
+      name: 'dsh-rampart'

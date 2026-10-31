@@ -11,9 +11,9 @@
 
 | 位置 | 内容 |
 |---|---|
-| `D:\Users\zigang.wang\.dsh\profiles\desktop\node_modules\dsh-resource-guard` | 指向本仓库的 junction（`mklink /J`） |
-| `…\profiles\desktop\cordis.patch.yml` 末尾 | 一条 `insert`，`id: resource-guard`，名称 `dsh-resource-guard` |
-| 备份 | `cordis.patch.yml.bak-resource-guard-20261030-184919` |
+| `D:\Users\zigang.wang\.dsh\profiles\desktop\node_modules\dsh-rampart` | 指向本仓库的 junction（`mklink /J`） |
+| `…\profiles\desktop\cordis.patch.yml` 末尾 | 一条 `insert`，`id: rampart`，名称 `dsh-rampart` |
+| 备份 | `cordis.patch.yml.bak-rampart-20261030-184919` |
 
 **没有**改 `package.json`、**没有**重启应用。DSH 的 HMR 监听 profile patch，
 保存后约 2 秒 live recomposition。
@@ -22,10 +22,10 @@
 
 插件多了一半：`dsh.client` + `exports["./client"]` → `lib/client.js`，
 并在输入框下方挂一条 `CPU 12% · DSH 1.2 GB`。宿主编译期加了
-`/resource-guard/api/{stats,gc}` 两个路由（同一道 `connection` 围栏）。
+`/rampart/api/{stats,gc}` 两个路由（同一道 `connection` 围栏）。
 
 **这一半必须重启 Electron 才能看到。** 原因不是 HMR 慢，是
-`dsh-client-modules` 把「`dsh-resource-guard` 不是客户端包」这个**否定结论缓存到进程结束**
+`dsh-client-modules` 把「`dsh-rampart` 不是客户端包」这个**否定结论缓存到进程结束**
 （`pkgMeta` 是 `Map`，全文件没有任何 `delete`/`clear`）。当前桌面宿主是
 `2026-10-30 23:34:26` 启的，早于 `package.json` 加上 `dsh.client` 的 `00:06:50`，
 它内存里存的就是 `null`。
@@ -34,11 +34,11 @@
 
 ```powershell
 npm run verify:pill
-# PASS: boot 图里有 dsh-resource-guard/client.js
+# PASS: boot 图里有 dsh-rampart/client.js
 # PASS: 只有一条 combo 含我们的 bundle（实际 1 条）
 # PASS: 下载到的字节里有我们的 CSS 类名 / 注册的是 composer.dock 槽位
-# PASS: GET /resource-guard/api/stats → 200，带压力等级 + 整树提交量 408 MB
-# PASS: POST /resource-guard/api/gc 回收成功（freed 66.7 MB）
+# PASS: GET /rampart/api/stats → 200，带压力等级 + 整树提交量 408 MB
+# PASS: POST /rampart/api/gc 回收成功（freed 66.7 MB）
 # PASS: 不带 cookie → 403（围栏生效而不是路由缺失）
 ```
 

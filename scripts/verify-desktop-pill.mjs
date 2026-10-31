@@ -21,10 +21,10 @@
  * ## 断言什么
  *
  *   1. bundle 已构建（`lib/client.js` 在 junction 后可见）
- *   2. 首页 boot 图里**有** `dsh-resource-guard/client.js`
+ *   2. 首页 boot 图里**有** `dsh-rampart/client.js`
  *   3. 那条 combo URL 取回来 200，且字节里有我们的类名
- *   4. `/resource-guard/api/stats` 带 cookie 时 200 且字段齐全（真读数）
- *   5. `/resource-guard/api/gc` 能回收并给出「只回收 JS 堆」的说明
+ *   4. `/rampart/api/stats` 带 cookie 时 200 且字段齐全（真读数）
+ *   5. `/rampart/api/gc` 能回收并给出「只回收 JS 堆」的说明
  *   6. 不带 cookie 时是 403（围栏生效），而不是 404
  */
 
@@ -36,7 +36,7 @@ import { join, resolve } from 'node:path'
 const root = resolve(import.meta.dirname, '..')
 const home = join(root, '.verify', 'dsh-home')
 const profileDir = join(home, 'profiles', 'web')
-const pluginLink = join(profileDir, 'node_modules', 'dsh-resource-guard')
+const pluginLink = join(profileDir, 'node_modules', 'dsh-rampart')
 const logPath = join(root, '.verify', 'pill-verify-web.log')
 
 process.exitCode = 0
@@ -91,7 +91,7 @@ writeFileSync(
 )
 writeFileSync(
   join(profileDir, 'cordis.patch.yml'),
-  `# 只为本验收存在：一个隔离的 web profile，挂上护栏插件。\n- insert:\n    - id: resource-guard\n      name: 'dsh-resource-guard'\n      config:\n        showStatusPill: true\n        statusPillIntervalMs: 2000\n        sampleIntervalMs: 5000\n`,
+  `# 只为本验收存在：一个隔离的 web profile，挂上护栏插件。\n- insert:\n    - id: rampart\n      name: 'dsh-rampart'\n      config:\n        showStatusPill: true\n        statusPillIntervalMs: 2000\n        sampleIntervalMs: 5000\n`,
   'utf8',
 )
 
@@ -162,12 +162,12 @@ try {
   const html = await page.text()
 
   // 4) boot 图里必须有我们 —— 这是「客户端半边被组合进去」的硬证据
-  check(html.includes('dsh-resource-guard/client.js'), 'boot 图里有 dsh-resource-guard/client.js')
+  check(html.includes('dsh-rampart/client.js'), 'boot 图里有 dsh-rampart/client.js')
 
   const combos = [...html.matchAll(/(?:href|src)="(plugins\/\?\?[^"]+)"/g)].map((m) =>
     m[1].replace(/&amp;/g, '&'),
   )
-  const ours = combos.filter((url) => url.includes('dsh-resource-guard/client.js'))
+  const ours = combos.filter((url) => url.includes('dsh-rampart/client.js'))
   check(ours.length === 1, `只有一条 combo 含我们的 bundle（实际 ${ours.length} 条）`)
 
   if (ours.length > 0) {
@@ -176,13 +176,13 @@ try {
     check(script.status === 200, `combo 脚本可下载（实际 ${script.status}）`)
     check(text.includes('RGpill_pill'), '下载到的字节里有我们的 CSS 类名')
     check(text.includes('conversation.composer.dock'), 'bundle 里注册的是 composer.dock 槽位')
-    check(text.includes('"dsh-resource-guard"'), 'bundle 的模块 id 就是包名')
+    check(text.includes('"dsh-rampart"'), 'bundle 的模块 id 就是包名')
   }
 
   // 5) 宿主路由：带 cookie 应当 200 且是真读数
-  const statsResponse = await fetch(`${base}/resource-guard/api/stats`, { headers: { cookie } })
+  const statsResponse = await fetch(`${base}/rampart/api/stats`, { headers: { cookie } })
   const statsText = await statsResponse.text()
-  check(statsResponse.status === 200, `GET /resource-guard/api/stats → ${statsResponse.status}（应当 200）`)
+  check(statsResponse.status === 200, `GET /rampart/api/stats → ${statsResponse.status}（应当 200）`)
   let stats
   try {
     stats = JSON.parse(statsText)
@@ -202,16 +202,16 @@ try {
     check(stats.trustDegraded === false, '信任判定走的是 connection 服务（不是回环退化路径）')
   }
 
-  const gcResponse = await fetch(`${base}/resource-guard/api/gc`, { method: 'POST', headers: { cookie } })
+  const gcResponse = await fetch(`${base}/rampart/api/gc`, { method: 'POST', headers: { cookie } })
   const gc = await gcResponse.json().catch(() => ({}))
-  check(gcResponse.status === 200 && gc.ok === true, `POST /resource-guard/api/gc 回收成功（freed ${gc.freedMb} MB）`)
+  check(gcResponse.status === 200 && gc.ok === true, `POST /rampart/api/gc 回收成功（freed ${gc.freedMb} MB）`)
   check(typeof gc.note === 'string' && gc.note.includes('JS 堆'), '回收结果说明了「只回收 JS 堆」')
 
-  const unknown = await fetch(`${base}/resource-guard/api/nope`, { headers: { cookie } })
+  const unknown = await fetch(`${base}/rampart/api/nope`, { headers: { cookie } })
   check(unknown.status === 404, `未知子路径 404（实际 ${unknown.status}）`)
 
   // 6) 围栏：不带 cookie 必须 403，而不是 404 —— 404 说明路由根本没挂
-  const fenced = await fetch(`${base}/resource-guard/api/stats`)
+  const fenced = await fetch(`${base}/rampart/api/stats`)
   check(fenced.status === 403, `不带 cookie → ${fenced.status}（应当 403，围栏生效而不是路由缺失）`)
 } finally {
   spawn('cmd', ['/c', `taskkill /T /F /PID ${child.pid}`], { stdio: 'ignore' })

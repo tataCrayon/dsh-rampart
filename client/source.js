@@ -3,14 +3,28 @@
  *
  * ## 位置与观感
  *
- * 挂在 `conversation.composer.dock` —— DSH 自己把那三个统计 pill（`154 tok/s`、
- * `缓存命中 49%`、`38%`）放在这里。我们的读数并排放在它们右边，字号、前景色、
- * `tabular-nums` 都跟着它们走，让人一眼看出「这是同一类东西」。
+ * 挂在 `conversation.composer.dock` —— DSH 自己把那几个统计 pill（`154 tok/s`、
+ * `缓存命中 49%`）放在这里。但 DSH 的**上下文占用环**（`38%`）不经过 slot，它是
+ * `InputBar` 在 dock 末尾硬编码渲染的，排在所有 slot 条目之后。
+ *
+ * 所以「排到上下文环右边」不能靠 `order` 选项（那只管 slot 内部排序），只能用
+ * CSS：dock 是 flex 容器，slot 外壳是 `display:contents`，我们的根 `<span>` 因此
+ * 是 dock 的直接 flex item —— 给它 `order:1` 就落到默认 0 的上下文环之后。
+ *
+ * 字号、前景色、`tabular-nums` 都跟着内置统计条走，让人一眼看出「这是同一类东西」。
+ *
+ * ## 面板为什么与上下文面板同底
+ *
+ * `--dsw-specific-menu` 是**半透明**的（浅色主题 `#f8f9fa94`），只配 `background`
+ * 不配 `backdrop-filter` 会直接看到下面的对话文字，读数根本看不清。DSH 自己那三块
+ * 面板（上下文 / 统计 / todo）都是「半透明底 + `backdrop-filter: var(--dsw-menu-backdrop-filter)`
+ * + 用 `--dsw-elevation-stroke-color` 让阴影带描边」。这里照抄同一组声明，
+ * 不去发明新配色。
  *
  * ## 为什么自己轮询，而不是走 `slots.register` 的 `hooks`
  *
  * `hooks` 只能拿到 DSH 已投影好的会话数据，拿不到「读机器状态」。所以用 `fetch`
- * 打宿主路由（`/resource-guard/api/stats`）—— 与 dsh-better-sidebar 取数同一个路子，
+ * 打宿主路由（`/rampart/api/stats`）—— 与 dsh-better-sidebar 取数同一个路子，
  * 不经过模型、不花钱、不刷对话。
  *
  * ## 为什么这里写 ESM 而不是直接写成品 bundle
@@ -26,7 +40,7 @@ import { jsx, jsxs } from 'react/jsx-runtime'
 
 /** 与 DSH 内置统计条一致的样式；行内写死是为了免掉一次 CSS 构建。 */
 const CSS = `
-.RGpill_anchor{min-width:0;font-size:calc(var(--dsh-content-font-size-secondary,13px) - 1px);line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px));display:inline-flex}
+.RGpill_anchor{order:1;min-width:0;font-size:calc(var(--dsh-content-font-size-secondary,13px) - 1px);line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px));display:inline-flex}
 .RGpill_pill{box-sizing:border-box;border-radius:var(--dsw-radius-sm);max-width:100%;color:var(--dsw-alias-label-tertiary);font:inherit;font-variant-numeric:tabular-nums;line-height:inherit;white-space:nowrap;background:0 0;border:none;align-items:center;gap:6px;padding:1px 8px;display:inline-flex}
 .RGpill_pill svg{flex:none;width:14px;height:14px}
 button.RGpill_pill{cursor:pointer}
@@ -35,26 +49,31 @@ button.RGpill_pill:hover,button.RGpill_pill[aria-expanded=true]{background:var(-
 .RGpill_warn{color:var(--dsw-alias-state-warning-primary,#b8860b)}
 .RGpill_critical{color:var(--dsw-alias-state-error-primary,#d33)}
 .RGpill_dot{flex:none;width:6px;height:6px;border-radius:50%;background:currentColor}
-.RGpill_meter{position:relative;height:6px;border-radius:3px;overflow:hidden;background:var(--dsw-alias-interactive-bg-hover);margin:4px 0 2px}
-.RGpill_meterFill{position:absolute;inset:0 auto 0 0;border-radius:3px;background:var(--dsw-alias-label-tertiary);transition:width .3s ease}
-.RGpill_meterFill.RGpill_warn{background:var(--dsw-alias-state-warning-primary,#b8860b)}
-.RGpill_meterFill.RGpill_critical{background:var(--dsw-alias-state-error-primary,#d33)}
-.RGpill_meterHead{display:flex;justify-content:space-between;gap:12px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary)}
-.RGpill_meterHead b{color:var(--dsw-alias-label-secondary);font-weight:500;font-variant-numeric:tabular-nums}
-.RGpill_panel{position:fixed;z-index:1200;width:344px;max-width:calc(100vw - 24px);box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md);background:var(--dsw-specific-menu);box-shadow:var(--dsw-elevation-prominent);padding:10px 12px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}
+.RGpill_panel{position:fixed;z-index:1100;box-sizing:border-box;width:320px;max-width:calc(100vw - 24px);border-radius:var(--dsw-radius-lg);background:var(--dsw-specific-menu);backdrop-filter:var(--dsw-menu-backdrop-filter);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);box-shadow:var(--dsw-elevation-prominent);color:var(--dsw-alias-label-secondary);cursor:default;border:0;padding:12px;font-size:12px;line-height:20px}
 .RGpill_row{display:flex;justify-content:space-between;gap:12px;padding:2px 0}
 .RGpill_row .RGpill_key{color:var(--dsw-alias-label-tertiary)}
-.RGpill_row .RGpill_val{font-variant-numeric:tabular-nums}
-.RGpill_title{display:flex;align-items:center;justify-content:space-between;font-weight:600;margin-bottom:6px}
+.RGpill_row .RGpill_val{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-primary)}
+.RGpill_title{display:flex;align-items:center;justify-content:space-between;font-weight:600;color:var(--dsw-alias-label-primary)}
 .RGpill_badge{border-radius:var(--dsw-radius-sm);padding:0 6px;font-weight:500;font-size:11px}
-.RGpill_rule{height:1px;background:var(--dsw-alias-border-l1);margin:8px 0}
-.RGpill_action{box-sizing:border-box;width:100%;margin-top:8px;padding:5px 10px;border-radius:var(--dsw-radius-sm);border:.5px solid var(--dsw-alias-border-l2);background:var(--dsw-specific-menu);color:var(--dsw-alias-label-secondary);font:inherit;cursor:pointer}
+.RGpill_rule{height:1px;background:var(--dsw-alias-border-l1);margin:10px 0}
+.RGpill_meter{margin:10px 0 0}
+.RGpill_meterHead{display:flex;justify-content:space-between;gap:12px;color:var(--dsw-alias-label-tertiary)}
+.RGpill_meterHead b{color:var(--dsw-alias-label-primary);font-weight:500;font-variant-numeric:tabular-nums}
+.RGpill_bar{corner-shape:round;display:flex;gap:1px;height:6px;margin-top:6px;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover);overflow:hidden}
+.RGpill_seg{flex:none;min-width:2px;height:100%;border-radius:1px;background:var(--meter-tint,var(--dsw-alias-label-tertiary));transition:width .3s ease}
+.RGpill_legend{display:flex;flex-wrap:wrap;gap:2px 10px;margin-top:4px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
+.RGpill_legendItem{display:inline-flex;align-items:center;gap:4px;font-variant-numeric:tabular-nums}
+.RGpill_swatch{vertical-align:baseline;display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--meter-tint)}
+.RGpill_tintDsh{--meter-tint:var(--dsw-static-blue-450)}
+.RGpill_tintUsed{--meter-tint:var(--dsw-static-neutral-bluish-400)}
+.RGpill_tintFree{--meter-tint:var(--dsw-alias-interactive-bg-hover)}
+.RGpill_action{box-sizing:border-box;width:100%;margin-top:10px;padding:5px 10px;border-radius:var(--dsw-radius-sm);border:.5px solid var(--dsw-alias-border-l2);background:var(--dsw-specific-menu);color:var(--dsw-alias-label-secondary);font:inherit;cursor:pointer}
 .RGpill_action:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
 .RGpill_action:disabled{opacity:.55;cursor:default}
 .RGpill_note{margin-top:6px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
 `
 
-const STYLE_TAG_ID = 'resource-guard/StatusPill.css'
+const STYLE_TAG_ID = 'rampart/StatusPill.css'
 
 /** 依赖的客户端服务。 */
 export const inject = ['slots', 'locale']
@@ -67,6 +86,20 @@ export const inject = ['slots', 'locale']
 export function formatMb(mb) {
   if (!Number.isFinite(mb) || mb <= 0) return '—'
   return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`
+}
+
+/**
+ * 把一段占用量换算成占整机的百分比（0~100，一位小数）。
+ *
+ * 刻意**不**夹到整数：0.4% 的 DSH 占用夹成 0 会被 `filter(share > 0)` 整段丢掉，
+ * 于是「DSH 在用」这件事在图上直接消失，而它恰恰是最该被看见的那一段。
+ * @param {number} part 部分量。
+ * @param {number} whole 总量。
+ * @returns {number} 百分比。
+ */
+export function shareOf(part, whole) {
+  if (!Number.isFinite(part) || !Number.isFinite(whole) || whole <= 0 || part <= 0) return 0
+  return Math.round(Math.min(100, (part / whole) * 100) * 10) / 10
 }
 
 /**
@@ -89,7 +122,7 @@ export function ensureStyles() {
   if (typeof document === 'undefined') return
   if (document.querySelector(`style[data-plugin-css="${STYLE_TAG_ID}"]`) !== null) return
   const tag = document.createElement('style')
-  tag.dataset.plugin = 'dsh-resource-guard'
+  tag.dataset.plugin = 'dsh-rampart'
   tag.dataset.pluginCss = STYLE_TAG_ID
   tag.textContent = CSS
   document.head.appendChild(tag)
@@ -102,7 +135,7 @@ export function ensureStyles() {
  */
 export async function fetchStats(signal) {
   try {
-    const response = await fetch(new URL('resource-guard/api/stats', apiBase()).href, {
+    const response = await fetch(new URL('rampart/api/stats', apiBase()).href, {
       method: 'GET',
       headers: { accept: 'application/json' },
       signal,
@@ -121,7 +154,7 @@ export async function fetchStats(signal) {
  */
 export async function requestGc() {
   try {
-    const response = await fetch(new URL('resource-guard/api/gc', apiBase()).href, {
+    const response = await fetch(new URL('rampart/api/gc', apiBase()).href, {
       method: 'POST',
       headers: { accept: 'application/json' },
       body: '',
@@ -130,6 +163,93 @@ export async function requestGc() {
   } catch (error) {
     return { ok: false, error: String(error) }
   }
+}
+
+/**
+ * 算百分比，夹在 0~100。
+ * @param {number} used 已用。
+ * @param {number} total 总量。
+ * @returns {number} 0~100 的整数。
+ */
+function percentOf(used, total) {
+  if (!Number.isFinite(used) || !Number.isFinite(total) || total <= 0) return 0
+  return Math.max(0, Math.min(100, Math.round((used / total) * 100)))
+}
+
+/**
+ * 造一条「整机总量 = 多段占用」的占比条。
+ *
+ * 为什么不给每项各画一条：DSH 占用、整机已用、整机可用三个数共用**同一个分母**
+ * （整机物理内存 / 整机 CPU）。分开画会让人以为这是三件独立的事，实际它们是同一根
+ * 尺子上的三段。画成一根条之后，「这台机器还剩多少」是一眼的事。
+ *
+ * 语义是**已经用掉的灰、DSH 自己在用的蓝、剩下的留白**：灰就是「不可用」，
+ * 蓝是「这里面有我」，留白是「还能再吃」。
+ *
+ * @param {object} input 参数。
+ * @param {string} input.title 左侧说明（已翻译）。
+ * @param {string} input.right 右侧总数读数。
+ * @param {Array<{key: string, label: string, tint: 'Dsh'|'Used'|'Free', share: number, text: string}>} input.segments 分段（free 段只进图例，不画）。
+ * @param {boolean} [input.legend] 是否显示图例，默认显示。
+ * @returns {any} React 节点。
+ */
+export function stackedMeter(input) {
+  const used = input.segments
+    .filter((segment) => segment.tint !== 'Free')
+    .reduce((sum, segment) => sum + segment.share, 0)
+  const drawn = input.segments.filter((segment) => segment.tint !== 'Free' && segment.share > 0)
+  return jsxs('div', {
+    className: 'RGpill_meter',
+    children: [
+      jsxs('div', {
+        className: 'RGpill_meterHead',
+        children: [
+          jsx('span', { children: input.title }),
+          jsx('b', { children: input.right }),
+        ],
+      }),
+      jsxs('div', {
+        className: 'RGpill_bar',
+        role: 'progressbar',
+        'aria-label': input.title,
+        'aria-valuenow': Math.round(Math.min(100, used)),
+        'aria-valuemin': 0,
+        'aria-valuemax': 100,
+        'aria-valuetext': input.segments.map((segment) => `${segment.label} ${segment.text}`).join('，'),
+        children: drawn.map((segment) =>
+          jsx(
+            'span',
+            {
+              className: `RGpill_seg RGpill_tint${segment.tint}`,
+              style: { width: `${segment.share}%` },
+            },
+            segment.key,
+          ),
+        ),
+      }),
+      input.legend === false
+        ? null
+        : jsx('div', {
+            className: 'RGpill_legend',
+            children: input.segments.map((segment) =>
+              jsxs(
+                'span',
+                {
+                  className: 'RGpill_legendItem',
+                  children: [
+                    jsx('i', {
+                      className: `RGpill_swatch RGpill_tint${segment.tint}`,
+                      'aria-hidden': true,
+                    }),
+                    `${segment.label} ${segment.text}`,
+                  ],
+                },
+                `legend-${segment.key}`,
+              ),
+            ),
+          }),
+    ],
+  })
 }
 
 /**
@@ -192,8 +312,8 @@ export function StatusPill({ intervalMs = 2000, t }) {
   const dshMb = tree === null || tree === undefined ? null : tree.commitMb
 
   const parts = []
-  if (cpuPercent !== null) parts.push(`${cpuPercent}%`)
-  if (dshMb !== null) parts.push(formatMb(dshMb))
+  if (cpuPercent !== null) parts.push(`CPU ${cpuPercent}%`)
+  if (dshMb !== null) parts.push(`DSH ${formatMb(dshMb)}`)
   if (parts.length === 0) return null
 
   const readout = parts.join(' · ')
@@ -204,7 +324,7 @@ export function StatusPill({ intervalMs = 2000, t }) {
   const panelPosition = () => {
     const rect = anchorRef.current?.getBoundingClientRect?.()
     if (rect === undefined) return { top: 0, left: 0 }
-    const width = 344
+    const width = 320
     const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))
     return { top: Math.max(12, rect.top - 8), left, transform: 'translateY(-100%)' }
   }
@@ -227,57 +347,27 @@ export function StatusPill({ intervalMs = 2000, t }) {
       ],
     })
 
-  /**
-   * 算百分比，夹在 0~100。
-   * @param {number} used 已用。
-   * @param {number} total 总量。
-   * @returns {number} 0~100 的整数。
-   */
-  const percentOf = (used, total) => {
-    if (!Number.isFinite(used) || !Number.isFinite(total) || total <= 0) return 0
-    return Math.max(0, Math.min(100, Math.round((used / total) * 100)))
-  }
+  // ── 内存：整机物理 = DSH 提交 + 其他已用 + 空闲 ─────────────────────────
+  // DSH 的「提交量」可能大于「整机已用物理」（有换页、有共享页），所以先夹一次；
+  // 夹完仍然可能出现 DSH > 已用（提交比物理占用高），那是正常的，别让蓝色溢出轨道。
+  const totalMb = Math.max(0, guard.totalMb ?? 0)
+  const freePhysMb = Math.max(0, guard.availPhysMb ?? 0)
+  const usedPhysMb = Math.max(0, totalMb - freePhysMb)
+  const dshPhysMb = Math.max(0, Math.min(dshMb ?? 0, usedPhysMb))
+  const otherPhysMb = Math.max(0, usedPhysMb - dshPhysMb)
 
-  /**
-   * 造一条与 IDEA 内存指示器同构的用量条。
-   *
-   * IDEA 那个条的关键不是「好看」，而是**分母写在旁边**：`892M / 2G` 让人立刻知道
-   * 离顶还有多远。只画一条没有刻度的进度条等于没说。
-   *
-   * @param {string} labelKey 词典键（左侧说明）。
-   * @param {number} used 已用。
-   * @param {number} total 总量。
-   * @param {string} tone 'normal' | 'warn' | 'critical'。
-   * @returns {any} React 节点。
-   */
-  const meter = (labelKey, used, total, tone = 'normal') =>
-    jsxs('div', {
-      children: [
-        jsxs('div', {
-          className: 'RGpill_meterHead',
-          children: [
-            jsx('span', { children: translate(labelKey) }),
-            jsxs('b', { children: [`${formatMb(used)} / ${formatMb(total)}`, `  ${percentOf(used, total)}%`] }),
-          ],
-        }),
-        jsx('div', {
-          className: 'RGpill_meter',
-          role: 'progressbar',
-          'aria-label': translate(labelKey),
-          'aria-valuenow': percentOf(used, total),
-          'aria-valuemin': 0,
-          'aria-valuemax': 100,
-          children: jsx('span', {
-            className: `RGpill_meterFill${tone === 'normal' ? '' : ` RGpill_${tone}`}`,
-            style: { width: `${percentOf(used, total)}%` },
-          }),
-        }),
-      ],
-    })
+  // ── CPU：整机忙 = DSH 忙 + 其他忙，剩下是空闲 ──────────────────────────
+  const busyPercent = Math.max(0, Math.min(100, cpuPercent ?? 0))
+  const dshCpuPercent = Math.max(0, Math.min(busyPercent, tree?.treePercent ?? 0))
+  const otherCpuPercent = Math.max(0, busyPercent - dshCpuPercent)
+
+  const heapUsedMb = stats.heap?.heapUsedMb ?? 0
+  const heapLimitMb = stats.heap?.heapLimitMb ?? 0
 
   return jsxs('span', {
     ref: anchorRef,
     className: 'RGpill_anchor',
+    'data-composer-stat': 'rampart',
     children: [
       jsx('button', {
         type: 'button',
@@ -309,37 +399,87 @@ export function StatusPill({ intervalMs = 2000, t }) {
                   ],
                 }),
                 jsx('div', { className: 'RGpill_rule' }),
-                meter(
-                  'guard.meterTree',
-                  dshMb === null ? 0 : dshMb,
-                  guard.totalMb ?? 0,
-                  critical ? 'critical' : warned ? 'warn' : 'normal',
-                ),
-                meter(
-                  'guard.meterHeap',
-                  stats.heap?.heapUsedMb ?? 0,
-                  stats.heap?.heapLimitMb ?? 0,
-                  percentOf(stats.heap?.heapUsedMb ?? 0, stats.heap?.heapLimitMb ?? 0) >= 85
-                    ? 'critical'
-                    : percentOf(stats.heap?.heapUsedMb ?? 0, stats.heap?.heapLimitMb ?? 0) >= 70
-                      ? 'warn'
-                      : 'normal',
-                ),
-                jsx('div', { className: 'RGpill_rule' }),
-                jsxs('div', {
-                  style: { margin: 0 },
-                  children: [
-                    row('guard.machine', formatMb(guard.availPhysMb)),
-                    row('guard.commit', formatMb(guard.availCommitMb)),
-                    row('guard.cpu', `${cpuPercent === null ? '—' : cpuPercent}%`),
+                stackedMeter({
+                  title: translate('guard.meterMemory'),
+                  right: `${formatMb(usedPhysMb)} / ${formatMb(totalMb)} · ${percentOf(usedPhysMb, totalMb)}%`,
+                  segments: [
+                    {
+                      key: 'dsh',
+                      label: translate('guard.legendDsh'),
+                      tint: 'Dsh',
+                      share: shareOf(dshPhysMb, totalMb),
+                      text: formatMb(dshPhysMb),
+                    },
+                    {
+                      key: 'other',
+                      label: translate('guard.legendUsed'),
+                      tint: 'Used',
+                      share: shareOf(otherPhysMb, totalMb),
+                      text: formatMb(otherPhysMb),
+                    },
+                    {
+                      key: 'free',
+                      label: translate('guard.legendFree'),
+                      tint: 'Free',
+                      share: shareOf(freePhysMb, totalMb),
+                      text: formatMb(freePhysMb),
+                    },
+                  ],
+                }),
+                tree === null || tree === undefined
+                  ? null
+                  : stackedMeter({
+                      title: translate('guard.meterCpu'),
+                      right: `${Math.round(busyPercent)}%`,
+                      segments: [
+                        {
+                          key: 'dsh',
+                          label: translate('guard.legendDsh'),
+                          tint: 'Dsh',
+                          share: dshCpuPercent,
+                          text: `${Math.round(dshCpuPercent)}%`,
+                        },
+                        {
+                          key: 'other',
+                          label: translate('guard.legendUsed'),
+                          tint: 'Used',
+                          share: otherCpuPercent,
+                          text: `${Math.round(otherCpuPercent)}%`,
+                        },
+                        {
+                          key: 'free',
+                          label: translate('guard.legendFree'),
+                          tint: 'Free',
+                          share: Math.max(0, 100 - busyPercent),
+                          text: `${Math.round(Math.max(0, 100 - busyPercent))}%`,
+                        },
+                      ],
+                    }),
+                stackedMeter({
+                  title: translate('guard.meterHeap'),
+                  right: `${formatMb(heapUsedMb)} / ${formatMb(heapLimitMb)} · ${percentOf(heapUsedMb, heapLimitMb)}%`,
+                  legend: false,
+                  segments: [
+                    {
+                      key: 'used',
+                      label: translate('guard.legendUsed'),
+                      tint: 'Used',
+                      share: shareOf(heapUsedMb, heapLimitMb),
+                      text: formatMb(heapUsedMb),
+                    },
                   ],
                 }),
                 jsx('div', { className: 'RGpill_rule' }),
                 jsxs('div', {
                   style: { margin: 0 },
                   children: [
-                    row('guard.tree', `${tree?.processCount ?? 0} 进程 · ${formatMb(dshMb)}`),
-                    row('guard.treeCpu', `${tree?.treePercent ?? 0}%`),
+                    row('guard.commit', formatMb(guard.availCommitMb)),
+                    row(
+                      'guard.tree',
+                      translate('guard.treeValue')
+                        .replace('{count}', String(tree?.processCount ?? 0))
+                        .replace('{size}', formatMb(dshMb ?? 0)),
+                    ),
                     row('guard.denied', `${guard.deniedCalls ?? 0} / ${guard.delayedCalls ?? 0}`),
                   ],
                 }),
@@ -378,15 +518,16 @@ export function StatusPill({ intervalMs = 2000, t }) {
 const zh = {
   'guard.title': '资源护栏',
   'guard.aria': '资源护栏读数',
-  'guard.machine': '整机可用物理内存',
+  'guard.meterMemory': '整机物理内存',
+  'guard.meterCpu': '整机 CPU',
+  'guard.meterHeap': '本进程 JS 堆',
+  'guard.legendDsh': 'DSH',
+  'guard.legendUsed': '其他已用',
+  'guard.legendFree': '空闲',
   'guard.commit': '整机可用提交内存',
-  'guard.cpu': '整机 CPU',
   'guard.tree': 'DSH 进程树',
-  'guard.treeCpu': 'DSH CPU 占比',
+  'guard.treeValue': '{count} 进程 · {size}',
   'guard.denied': '已拦 / 降速',
-  'guard.heap': '本进程 JS 堆',
-  'guard.meterTree': 'DSH 占用 / 整机物理',
-  'guard.meterHeap': 'JS 堆 / 堆上限',
   'guard.collect': '释放内存',
   'guard.collecting': '回收中…',
   'guard.note': '只回收本进程 JS 堆，不动 renderer 与系统缓存。',
@@ -398,15 +539,16 @@ const zh = {
 const en = {
   'guard.title': 'Resource guard',
   'guard.aria': 'Resource guard readout',
-  'guard.machine': 'Free physical memory',
+  'guard.meterMemory': 'Machine memory',
+  'guard.meterCpu': 'Machine CPU',
+  'guard.meterHeap': 'This process · JS heap',
+  'guard.legendDsh': 'DSH',
+  'guard.legendUsed': 'Used',
+  'guard.legendFree': 'Free',
   'guard.commit': 'Free commit memory',
-  'guard.cpu': 'Machine CPU',
   'guard.tree': 'DSH process tree',
-  'guard.treeCpu': 'DSH CPU share',
+  'guard.treeValue': '{count} processes · {size}',
   'guard.denied': 'Denied / delayed',
-  'guard.heap': 'This process · JS heap',
-  'guard.meterTree': 'DSH of total RAM',
-  'guard.meterHeap': 'JS heap of limit',
   'guard.collect': 'Free memory',
   'guard.collecting': 'Collecting…',
   'guard.note': 'Collects this process JS heap only; renderers and OS cache are untouched.',
@@ -422,15 +564,16 @@ const en = {
  */
 export function apply(ctx, config) {
   const intervalMs = Number(config?.statusPillIntervalMs ?? 2000)
-  ctx.effect(() => ctx.locale.register('guard', { zh, en }), 'resource-guard: dictionaries')
+  ctx.effect(() => ctx.locale.register('guard', { zh, en }), 'rampart: dictionaries')
   ctx.effect(
     () =>
       ctx.slots.inject('conversation.composer.dock', () =>
         ctx.slots.register(
           {
             name: 'conversation.composer.dock',
-            id: 'resource-guard',
-            // 排在 activity(0) / usage(1) 之后，成为这一行的第三块
+            id: 'rampart',
+            // 排在 activity(0) / usage(1) 之后；上下文环不经过 slot，靠 CSS `order` 越过它，
+            // 见文件头的「位置与观感」。
             order: 2,
             locale: 'guard',
             inject: () => ({ intervalMs }),
@@ -438,6 +581,6 @@ export function apply(ctx, config) {
           StatusPill,
         ),
       ),
-    'resource-guard: composer dock pill',
+    'rampart: composer dock pill',
   )
 }
