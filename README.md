@@ -262,6 +262,61 @@ npm test
 覆盖：阈值分级、迟滞、重活判定、决策、配置校验、优先级/亲和性的**可逆性**、
 以及在**真 cordis + 真 ToolRuntime** 里的门禁行为（critical 时工具体确实没执行——用副作用文件断言，不读返回值）。
 
+### 性能：热路径开销
+
+护栏挂在**每一次工具调用**上，所以它的开销必须小到看不见。`npm run bench`：
+
+```powershell
+npm run bench
+# Win32 能力层：可用 · 逻辑核 24
+# gate() 轻工具 read            中位   7.8 µs   p95  12.1 µs   最大  38.0 µs  (n=300)
+# gate() 重活 pwsh              中位   7.6 µs   p95  21.3 µs   最大 157.8 µs  (n=300)
+# tick() 单次采样               中位   6.8 µs   p95   7.7 µs   最大 387.6 µs  (n=300)
+# TreeSampler.sample() (421进程) 中位 15.4 ms  p95 17.5 ms  最大 20.6 ms  (n=60)
+# decideCall() 纯函数           中位   0.4 µs   p95   1.1 µs   最大 111.9 µs  (n=2000)
+```
+
+三句话读懂：
+
+| 路径 | 频率 | 成本 | 结论 |
+|---|---|---|---|
+| `gate()` | 每次工具调用 | **~8 µs** | 相对一次 pwsh 冷启动（~200 ms）是 1/25000，可忽略 |
+| `tick()` | 每 5 秒后台 + 每次 gate 内 | **~7 µs** | `GlobalMemoryStatusEx` 就是一次很短的 FFI 调用 |
+| `TreeSampler.sample()` | 每 2 秒（面板轮询） | **~17 ms** | 一次 Toolhelp 全表快照遍历 421 个进程，占单核 **0.87%** |
+
+`TreeSampler` 那一项是唯一「贵」的，且**只在桌面有面板时**才跑（CLI-only profile 不挂路由）。
+17 ms 里几乎全是 `createToolhelp32Snapshot` 本身（一次全表快照 ~12 ms），
+不是我们的解析逻辑——拆开量过：`readProcessUsage` 每个成员只要 0.02 ms。
+
+**为什么不用更省的方案**：可以把采样间隔从 2 秒放长，但面板读数的意义就在「实时」。
+0.87% 的单核成本换一个能实时看到「整机被谁吃了」的面板，是划算的；
+嫌贵就把 `statusPillIntervalMs` 调到 5000。
+
+### 可靠性：泄漏、并发与降级
+
+```powershell
+npm run soak
+# 7000 次热路径调用后：heapUsed 5.3 → 5.4 MB（Δ 0.1），RSS Δ 3 MB
+# PASS: 热路径无明显泄漏（heap Δ 0.1 MB < 8 MB）
+# PASS: 采样计数准确（7000）
+# PASS: 树采样无明显泄漏（heap Δ 0 MB < 8 MB）
+# PASS: 200 个并发门禁全部放行（normal 等级）
+# PASS: 并发下采样计数无丢失（200）
+# PASS: 迟滞生效，交错抖动时等级不跳变
+# PASS: dispose() 可重复调用（无异常）
+```
+
+```powershell
+npm run verify:degrade
+# PASS: 无能力层时仍能定级 / gate 不抛 / start-dispose 不抛
+# PASS: 能力位如实报告 win32=false
+```
+
+**为什么这两条必须单独存在**：单元测试每次都是新实例，测不出「连续用几小时后护栏突然失灵」；
+而市场用户很可能在 koffi 加载失败的环境里跑，那时**宁可退化为纯观测，也不能崩**。
+代码里所有副作用都走「失败只降级」：`gate()` 自身抛错时放行（宁可漏拦一次，
+也不要把模型卡死在一条假错误上）。
+
 ### Win32 真机探针
 
 ```powershell
@@ -355,7 +410,10 @@ scripts/build-client.mjs 只改 import/export 的构建脚本，转完会跑一�
 scripts/make-icon.py 生成 assets/icon-{1024,180}.png（深蓝底 + 白色城垛）
 scripts/launch.mjs 启动壳 CLI
 scripts/launcher.mjs 启动壳实现（Job 整树硬顶）
-scripts/verify-*.mjs 真机验收（可逆性 / Job 内核语义 / 启动壳 / 真 profile / 读数条）
+scripts/verify-*.mjs 真机验收（可逆性 / Job 内核语义 / 启动壳 / 真 profile / 读数条 / 降级）
+scripts/bench.mjs  热路径性能基准（gate / tick / 整树采样 / 纯函数决策）
+scripts/soak.mjs   可靠性浸泡（泄漏、并发门禁、迟滞抖动、dispose 幂等）
+scripts/preview-panel.mjs 用无头 Chrome 把面板截成图（验观感，不跑 DSH）
 scripts/*-probe.js 只在 .verify profile 里挂载的探针
 scripts/probe-*.cjs 一次性诊断探针（错误码、偏移量），留着是因为它们是那些教训的证据
 test/              72 条（pressure 19 / tree-stats 16 / guardian 14 / config 10 / integration 5 / client 契约 8）

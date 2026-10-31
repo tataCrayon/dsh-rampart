@@ -85,8 +85,12 @@
     "verify": "node scripts/verify-reversible.mjs && node scripts/verify-cap.mjs && node scripts/verify-launcher-job.mjs",
     "verify:profile": "node scripts/verify-profile.mjs",
     "verify:pill": "node scripts/verify-desktop-pill.mjs",
+    "verify:degrade": "node scripts/verify-degrade.mjs",
+    "bench": "node scripts/bench.mjs",
+    "soak": "node --expose-gc scripts/soak.mjs",
+    "preview": "node scripts/preview-panel.mjs",
     "launch": "node scripts/launch.mjs",
-    "prepublishOnly": "npm run build:client && npm test"
+    "prepublishOnly": "npm run build:client && npm test && npm run soak"
   },
   "dsh": {
     "bundle": {
