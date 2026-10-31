@@ -45,8 +45,9 @@
 - [x] `dsh.bundle.patch` + `cordis.patch.yml` + `dsh.client` 三件套齐
 - [x] `LICENSE`（MIT）、`assets/icon-180.png`（市场卡片图标）、`assets/icon-1024.png`（宣传图）
 - [x] GitHub 仓库 `tataCrayon/dsh-rampart` 已建，`dsh-plugin` 等 topic 已打
-- [x] **代码已推到 master**，`0bb76c3b21235b945d7fc64481190f301d38b796`
-- [x] 72 条单测全绿（`npm test`）；`npm run verify:pill` 与 `verify:profile` 全 PASS
+- [x] **代码已推到 master**，`6d6f7a08454ba9a4ca1faa47141bfbcfa5b471db`
+- [x] 82 条单测全绿（`npm test`）；`npm run verify:pill` 与 `verify:profile` 全 PASS
+- [x] `npm publish --dry-run` 通过：20 个文件、67.7 kB 包、181.3 kB 解包（不含 `.scratch/`）
 
 **还差两步**：发到 npm、提市场条目。下面逐步给命令。
 
