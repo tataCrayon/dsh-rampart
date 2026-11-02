@@ -3,3 +3,6 @@
 .scratch/
 node_modules/
 *.log
+
+# npm pack 产物：发布时现打，不进仓库
+*.tgz

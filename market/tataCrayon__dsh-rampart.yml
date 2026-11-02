@@ -9,10 +9,16 @@
 #     dsh-memory-watchdog / dsh-concurrency-guard 同类）
 #   - 描述含 ": " 必须加引号，否则 YAML 解析成嵌套键
 #   - icon 必须是 GitHub 托管的位图（png/jpg/jpeg/webp），SVG 和第三方图床会被拒
-#   - 仓库需创建满 1 天（本仓库 2026-10-31 07:32:50Z 建，满 24h 是 11-01 15:32 北京时间）
+#   - 仓库需创建满 1 天（2026-10-31 07:32:50Z 建，已于 11-01 15:32 满足）
+#
+# tarball 是**必需的，不是锦上添花**：npm 把 `github:owner/repo` 解析成
+# `ssh://git@github.com/...`（本仓 GIT_TRACE 实测），没配 SSH 密钥的人会
+# `Permission denied (publickey)`。给 Release 托管的预构建包，装的人才不卡在这。
+# 资产名刻意不带版本号，配合钉住的 tag —— contributing.md 点名的两种不腐烂写法之一。
 url: https://github.com/tataCrayon/dsh-rampart
 name: tataCrayon/dsh-rampart
 category: dev
+tarball: https://github.com/tataCrayon/dsh-rampart/releases/download/v0.2.0/dsh-rampart.tgz
 description:
   en: 'Grades whole-machine memory and CPU pressure and refuses heavy tools (shell, workflow, subagent) before the machine thrashes, and shows in the composer how much of it dsh itself is using.'
   zh: '按整机内存/CPU 压力分级，到线就拦重活（shell、workflow、subagent），并在输入框旁显示 DSH 自己占用了整机多少资源。'
