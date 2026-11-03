@@ -61,3 +61,55 @@ jobs:
           } catch {
             Write-Host ("signup(browser UA) -> ERR {0}" -f $_.Exception.Message)
           }
+
+      # 决定性实验：**已存在的账号还能不能只用命令行登录。**
+      #
+      # npm 关掉的措辞是 "Account *creation* via legacy auth is unavailable"，
+      # 只封了建号，没说封登录。这两个动作打的是同一个端点
+      # `PUT /-/user/org.couchdb.user:<name>`，区别只在响应：
+      #
+      #   账号已存在 + 密码错 → 401 unauthorized      ← 登录通道还活着
+      #   账号不存在          → 403 creation blocked  ← 通道已关
+      #
+      # 所以拿一个**确定存在**的账号、配一个**故意错**的密码打一次，就能分辨。
+      # 不创建任何东西，也不改任何东西：错密码永远只是失败。
+      - name: Can an existing account still log in from the CLI?
+        shell: pwsh
+        run: |
+          $cases = @(
+            @{ user = 'isaacs'; why = 'npm 创始人，确定存在的账号（判据）' },
+            @{ user = 'tatacrayon'; why = '本项目的候选账号，验证是否已建出' }
+          )
+          foreach ($c in $cases) {
+            $body = @{ name = $c.user; password = 'probe-wrong-password-on-purpose-9f3a' } |
+                      ConvertTo-Json -Compress
+            try {
+              $r = Invoke-WebRequest -Uri "https://registry.npmjs.org/-/user/org.couchdb.user:$($c.user)" `
+                     -Method Put -ContentType 'application/json' -Body $body `
+                     -SkipHttpErrorCheck -TimeoutSec 25 -ErrorAction Stop
+              $verdict = switch ($r.StatusCode) {
+                401 { 'LOGIN ALIVE' }
+                403 { 'CREATION BLOCKED / 通道已关' }
+                default { '?' }
+              }
+              Write-Host ("{0,-14} {1}  -> {2}  [{3}]" -f $c.user, $r.StatusCode, $verdict, $c.why)
+              Write-Host ("    body: {0}" -f $r.Content.Substring(0, [Math]::Min(220, $r.Content.Length)))
+            } catch {
+              Write-Host ("{0,-14} ERR {1}" -f $c.user, $_.Exception.Message)
+            }
+          }
+
+      # 顺带确认：registry 的 token 认证端点（npm publish 真正打的那个）通不通。
+      # 用一个假 token 打，401 = 端点活着（只差一枚真 token），403 = 连发布都进不去。
+      - name: Is the publish endpoint reachable at all?
+        shell: pwsh
+        run: |
+          try {
+            $r = Invoke-WebRequest -Uri 'https://registry.npmjs.org/-/npm/v1/user' `
+                   -Headers @{ Authorization = 'Bearer npm_bogus_token_probe' } `
+                   -SkipHttpErrorCheck -TimeoutSec 25 -ErrorAction Stop
+            Write-Host ("whoami(bogus token) -> {0}" -f $r.StatusCode)
+            Write-Host ("  cf-mitigated={0}" -f ($r.Headers['Cf-Mitigated'] ?? '-'))
+          } catch {
+            Write-Host ("whoami(bogus token) -> ERR {0}" -f $_.Exception.Message)
+          }
