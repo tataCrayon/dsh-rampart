@@ -403,6 +403,49 @@ gh workflow run publish.yml --repo tataCrayon/dsh-rampart -f dry_run=false
 这三步已经**分别**跑过了（失败时日志能分清是哪一步挂的）。再让 npm 跑一遍不只慢一倍，
 还会让真实失败被埋在 `prepublishOnly` 这一层包装里。
 
+### 宿主依赖：为什么在 CI 里临时装
+
+集成测试 `test/integration.test.mjs` 要真起一个 cordis `Context` + 真 `ToolRuntime`，
+所以它 import 了三个**由 DSH 本体提供**的包：
+
+```
+@deepseek-ai/cordis
+@deepseek-ai/dsh-tools
+@deepseek-ai/dsh-system-prompt
+```
+
+它们刻意**不在** `package.json` 的 `dependencies` 里 —— 声明它们等于把插件钉死在
+某一版宿主上。所以 workflow 用 `npm install --no-save` 临时装，不写进清单、不生成
+lockfile。
+
+**版本精确钉到本机 DSH 0.2.1-rc.2 内部实际带的版本**，不是 `@latest`：
+
+| 包 | CI 装 | 注意 |
+|---|---|---|
+| `@deepseek-ai/cordis` | `4.0.5` | 与 `package.json` 的 peer 范围一致 |
+| `@deepseek-ai/dsh-tools` | `0.2.1-rc.2` | **`latest` 是 `0.0.1-rc.1`**，差了一个大版本 |
+| `@deepseek-ai/dsh-system-prompt` | `0.2.1-rc.2` | 同上 |
+
+`dsh-tools` / `dsh-system-prompt` 的 `dist-tags.latest` 停在 `0.0.1-rc.1`，而真实宿主里
+是 `0.2.1-rc.2`。装 `@latest` 会拿到一个 API 不兼容的老版本，集成测试会以「查不到某个
+导出」的方式失败 —— 看起来像插件坏了，其实是装错了宿主。所以这里写死版本。
+
+### 测试在缺宿主时是跳过，不是失败
+
+`test/integration.test.mjs` 用动态 `import()` 拿这三个包，**只吞 `ERR_MODULE_NOT_FOUND`**：
+
+- 有宿主依赖 → 5 条集成测试真跑
+- 没有 → 5 条标 `skipped` 并打印缺哪个包，退出码 0（不把整份套件弄挂）
+- 语法错 / 导出名改错 → 照旧抛错，不会被当成「环境缺失」藏起来
+
+这条分支两边都验过：
+
+| 环境 | 结果 |
+|---|---|
+| 本机（DSH 全局装） | `tests 5 / pass 5 / skipped 0` |
+| 空 `node_modules` | `tests 5 / pass 0 / skipped 5`，退出码 0 |
+| 完整隔离副本 + 三个宿主包 | `npm test` → `tests 93 / pass 93 / fail 0` |
+
 ### 验证它真的成了
 
 ```powershell

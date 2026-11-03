@@ -14,10 +14,35 @@ import { mkdtempSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { Context } from '@deepseek-ai/cordis'
-import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
-import ToolRuntime from '@deepseek-ai/dsh-tools'
 import * as guardPlugin from '../lib/index.js'
+
+/**
+ * 宿主依赖：这三个包由 DSH 本体提供，本仓库**不声明**也不打包它们。
+ *
+ * 所以它们只在「装了 DSH 的机器」上解析得到。这里动态导入而不是静态导入，
+ * 是为了在没有宿主的环境（比如干净 CI runner）里把这一组测试**标记为跳过**
+ * 而不是整份文件加载失败 —— 后者会让 `npm test` 直接红，看起来像代码坏了，
+ * 实际只是缺一个测试环境。
+ *
+ * 只吞 ERR_MODULE_NOT_FOUND。别的错误（语法错、导出名错）照旧抛出去，
+ * 不能被这个 try 顺手藏起来。
+ */
+let Context
+let SystemPrompt
+let ToolRuntime
+/** false 表示照常跑；字符串表示跳过的原因（node:test 会把它打出来）。 */
+let hostSkip = false
+
+try {
+  ;({ Context } = await import('@deepseek-ai/cordis'))
+  ;({ default: SystemPrompt } = await import('@deepseek-ai/dsh-system-prompt'))
+  ;({ default: ToolRuntime } = await import('@deepseek-ai/dsh-tools'))
+} catch (error) {
+  if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error
+  hostSkip =
+    '需要宿主依赖 @deepseek-ai/cordis + dsh-system-prompt + dsh-tools（只有装了 DSH 的机器才有）。' +
+    `实际缺失：${error.message.split('\n')[0]}`
+}
 
 /**
  * 组装一个只装了 systemPrompt + tools + 护栏的 composition。
@@ -84,7 +109,7 @@ async function call(ctx, name) {
   return { isError: result.isError === true, text }
 }
 
-test('critical 压力下：重活工具被拒，工具体没有执行', async () => {
+test('critical 压力下：重活工具被拒，工具体没有执行', { skip: hostSkip }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'rg-int-'))
   const marker = join(dir, 'heavy.marker')
   // 阈值设到必然越线：可用内存低于 1 MB 才算正常
@@ -101,7 +126,7 @@ test('critical 压力下：重活工具被拒，工具体没有执行', async ()
   await ctx.dispose?.()
 })
 
-test('normal 压力下：同一个重活工具正常执行', async () => {
+test('normal 压力下：同一个重活工具正常执行', { skip: hostSkip }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'rg-int-'))
   const marker = join(dir, 'heavy.marker')
   const { ctx } = await compose({
@@ -118,7 +143,7 @@ test('normal 压力下：同一个重活工具正常执行', async () => {
   await ctx.dispose?.()
 })
 
-test('critical 压力下：轻工具不受影响（模型仍能收尾）', async () => {
+test('critical 压力下：轻工具不受影响（模型仍能收尾）', { skip: hostSkip }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'rg-int-'))
   const marker = join(dir, 'light.marker')
   const { ctx } = await compose({
@@ -134,7 +159,7 @@ test('critical 压力下：轻工具不受影响（模型仍能收尾）', async
   await ctx.dispose?.()
 })
 
-test('resource_guard 工具：返回可读读数与被拦计数', async () => {
+test('resource_guard 工具：返回可读读数与被拦计数', { skip: hostSkip }, async () => {
   const { ctx } = await compose({
     criticalFreeMemoryMb: 999_999_999,
     warnFreeMemoryMb: 999_999_999,
@@ -150,7 +175,7 @@ test('resource_guard 工具：返回可读读数与被拦计数', async () => {
   await ctx.dispose?.()
 })
 
-test('护栏被 dispose 后恢复进程优先级（不污染宿主）', async () => {
+test('护栏被 dispose 后恢复进程优先级（不污染宿主）', { skip: hostSkip }, async () => {
   const { ctx } = await compose({ sampleIntervalMs: 0 })
   const priorityBefore = process.env.__RG_PRIORITY_PROBE__ ?? null
   await ctx.dispose?.()

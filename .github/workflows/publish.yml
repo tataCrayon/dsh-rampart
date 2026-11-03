@@ -62,6 +62,20 @@ jobs:
       - name: Build client bundle
         run: npm run build:client
 
+      # 集成测试要真跑，就得有宿主依赖。这三个包由 DSH 本体提供，本仓库刻意**不声明**
+      # 它们 —— 声明等于把 DSH 的版本钉死在插件里，插件就只认那一版宿主了。所以只在
+      # CI 里临时装，`--no-save` 不写进 package.json、不生成 lockfile。
+      #
+      # 版本精确钉到本机 DSH 0.2.1-rc.2 内部实际带的版本，不是 @latest：
+      # 集成测试断言的是「真实 cordis 流水线里 tools/pre-execute 门禁生效」，
+      # 宿主 API 一变这条断言就成了假话。装错版本时让它红，比悄悄跳过诚实得多。
+      - name: Install host deps for integration tests
+        run: >-
+          npm install --no-save --no-audit --no-fund
+          @deepseek-ai/cordis@4.0.5
+          @deepseek-ai/dsh-tools@0.2.1-rc.2
+          @deepseek-ai/dsh-system-prompt@0.2.1-rc.2
+
       - name: Unit tests
         run: npm test
 
