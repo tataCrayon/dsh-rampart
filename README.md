@@ -18,8 +18,14 @@ CPU 占比只显示、不参与分级 —— `gradeOf()` 只看四个内存阈�
 数据不走模型，是浏览器直接打宿主路由取的本机读数。
 
 ```powershell
-dsh plugin --profile web add dsh-rampart
+dsh plugin --profile web add https://github.com/tataCrayon/dsh-rampart/releases/download/v0.2.0/dsh-rampart.tgz
 ```
+
+> **还没发 npm，所以装法用 tarball URL，不要用 `add dsh-rampart`。**
+> 名字形式要先过 registry，而现在 `registry.npmjs.org/dsh-rampart` 是 404。
+> 也不要退回 `add github:tataCrayon/dsh-rampart` —— npm 会把它解析成
+> `ssh://git@github.com/...`，没配 GitHub SSH 密钥的人会直接
+> `Permission denied (publickey)`。上面的 tarball 走 HTTPS，不需要任何凭证。
 
 > ⚠️ 与 npm 上已存在的 `dsh-resource-guard`（另一个作者的本地模型内存信号量插件）
 > **不是同一个东西**。本插件原名就是那个，为避让而改名。
