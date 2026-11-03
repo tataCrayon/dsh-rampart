@@ -77,7 +77,8 @@ jobs:
         shell: pwsh
         run: |
           $cases = @(
-            @{ user = 'isaacs'; why = 'npm 创始人，确定存在的账号（判据）' },
+            @{ user = 'isaacs'; why = 'npm 创始人，确定存在（阳性对照）' },
+            @{ user = 'zzz-no-such-user-8f3a2c1d'; why = '确定不存在（阴性对照）' },
             @{ user = 'tatacrayon'; why = '本项目的候选账号，验证是否已建出' }
           )
           foreach ($c in $cases) {
@@ -88,16 +89,20 @@ jobs:
                      -Method Put -ContentType 'application/json' -Body $body `
                      -SkipHttpErrorCheck -TimeoutSec 25 -ErrorAction Stop
               $verdict = switch ($r.StatusCode) {
-                401 { 'LOGIN ALIVE' }
-                403 { 'CREATION BLOCKED / 通道已关' }
+                401 { 'LOGIN ALIVE（账号存在，只是密码错）' }
+                403 { 'CREATION BLOCKED（账号不存在，建号已关）' }
                 default { '?' }
               }
-              Write-Host ("{0,-14} {1}  -> {2}  [{3}]" -f $c.user, $r.StatusCode, $verdict, $c.why)
-              Write-Host ("    body: {0}" -f $r.Content.Substring(0, [Math]::Min(220, $r.Content.Length)))
+              Write-Host ("{0,-28} {1}  -> {2}" -f $c.user, $r.StatusCode, $verdict)
+              Write-Host ("    {0}" -f $c.why)
             } catch {
-              Write-Host ("{0,-14} ERR {1}" -f $c.user, $_.Exception.Message)
+              Write-Host ("{0,-28} ERR {1}" -f $c.user, $_.Exception.Message)
             }
           }
+          Write-Host ''
+          Write-Host '判读：阳性对照 401 + 阴性对照 403 => 这个端点区分「账号存在」与「不存在」，'
+          Write-Host '     那么 tatacrayon 的返回码就能直接回答「账号建出来了没有」。'
+          Write-Host '若两者都 401，说明 npm 已做防枚举，tatacrayon 的存在性无法用这个端点判定。'
 
       # 顺带确认：registry 的 token 认证端点（npm publish 真正打的那个）通不通。
       # 用一个假 token 打，401 = 端点活着（只差一枚真 token），403 = 连发布都进不去。
