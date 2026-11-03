@@ -1,66 +1,67 @@
-# 市场投稿：当前进度与续作步骤
+# 市场投稿：已提交
 
-> 写这份是因为提交到一半时本机内存压力进了 critical（可用物理 1.2~1.7 GB / 32 GB，
-> 占用 94~97%），护栏开始拦 `pwsh`。下面的东西都已做完并验证过，只有最后两步要跑命令。
+**PR：[awesome-dsh-plugin#11542](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/11542)**
+标题 `Add tataCrayon/dsh-rampart`，分支 `tataCrayon:add-dsh-rampart` → `awesome-dsh-plugin:main`，
+提交 `0b110c0`，改动 1 个文件 `data/plugins/tataCrayon__dsh-rampart.yml`（+30 行）。
 
-## 已经做完、且有实测证据的
+2026-11-03 12:30 实测：
+
+| 项 | 结果 |
+|---|---|
+| PR 状态 | `open` |
+| `mergeable_state` | **`clean`**（可合并，无冲突、无待改） |
+| CI run 41576479380 | **`completed / success`** |
+| 改动文件数 | 1（没碰 README，符合要求） |
+| 标签 | 无 `held: author` |
+
+CI 全部 14 步通过，包括最容易挂的两步：`READMEs match data/plugins`、
+`Stale-fork guard`，以及 `Build (locale parity, date derivation, templates)`。
+
+## 提交前做的核对
 
 | 事项 | 状态 | 证据 |
 |---|---|---|
-| 仓库满 1 天 | ✅ | `created_at 2026-10-31T07:32:50Z`，距今 1.97 天（门槛 1 天） |
+| 仓库满 1 天 | ✅ | `created_at 2026-10-31T07:32:50Z`，提交时 3.02 天（门槛 1 天） |
 | `dsh.bundle` 声明 | ✅ | `dsh.bundle.patch = ./cordis.patch.yml` |
 | `dsh-plugin` topic | ✅ | 已打 |
 | 默认分支 | `master`（不是 main） | API `default_branch = master` |
-| 图标 URL 可访问 | ✅ master 分支 | API `contents/assets/icon-180.png?ref=master` → 1407 字节；`?ref=main` → 404 |
-| 预构建 tarball 已上传 | ✅ | `releases/download/v0.2.0/dsh-rampart.tgz`，73874 B，SHA256 与本地一致 |
-| 陌生人能从 tarball 装 | ✅ | `npm install <tarball URL>` → 6s 装完，`lib/index.js` 在 |
-| 陌生人从 `github:` 简写装 | ❌ 会失败 | GIT_TRACE 实测解析成 `ssh://git@github.com/...`；空 HOME + batch mode → `Permission denied (publickey)` |
-| 市场自己的 gate 脚本 | ✅ 通过 | `check-submission.mjs` → `{ok: true, checked: 1, failures: []}` |
-| 条目字段解析 | ✅ | `entries.mjs` 读出 category/tarball/description 全对 |
+| 图标 URL | ✅ master 分支 | API `?ref=master` → 1407 字节；`?ref=main` → 404 |
+| 预构建 tarball | ✅ | `releases/download/v0.2.0/dsh-rampart.tgz`，73874 B，SHA256 与本地一致 |
+| 陌生人从 tarball 装 | ✅ | `npm install <url>` → 6 秒，`lib/index.js` 在 |
+| 陌生人从 `github:` 简写装 | ❌ 会失败 | GIT_TRACE 实测解析成 `ssh://git@github.com/...`；空 HOME + batch → `Permission denied (publickey)` |
+| 市场 gate 脚本 | ✅ | 本地跑 `check-submission.mjs` → `{"ok": true, "checked": 1, "failures": []}` |
 | 测试 | ✅ 93/93 | `npm test` |
 
-## 已经推到 fork 的
+## 提交时踩到的坑：描述夸大
 
-- fork：`tataCrayon/awesome-dsh-plugin`（默认分支 main）
-- 分支：`add-dsh-rampart`
-- 提交：`0b110c0 Add tataCrayon/dsh-rampart`（**但这次 push 被中断，未确认落地**）
-- 分支内容：只加 `data/plugins/tataCrayon__dsh-rampart.yml`，不碰 README
+初稿写的是「Grades whole-machine **memory and CPU** pressure」。对着代码核：
 
-**续作第一步就是确认它到底推上去了没有：**
-
-```powershell
-git ls-remote --heads https://github.com/tataCrayon/awesome-dsh-plugin.git add-dsh-rampart
+```
+gradeOf() 读的阈值：warnFreeMemoryMb / criticalFreeMemoryMb / warnCommitMb / criticalCommitMb
+config.js 里的 CPU 阈值：没有
 ```
 
-- 返回 `0b110c0...` → 已推上去，直接开 PR。
-- 返回 `a802582...`（旧提交）或空 → 重新推：
+`gradeOf()` 只读四个内存阈值，**CPU 全仓库没有任何阈值配置**，只用于画读数条。
+contributing.md 明说审核会把描述当声明逐字对着代码核，夸大是头号打回原因。
+所以提交前改成了：
 
-```powershell
-cd "$env:TEMP\market-gate-test"   # 市场仓库的浅克隆，分支已 checkout
-$cred = "protocol=https`nhost=github.com`n`n" | git credential fill
-$t = ($cred -split "`n" | Where-Object { $_ -match '^password=' }) -replace '^password=',''
-git remote add fork "https://x-access-token:$t@github.com/tataCrayon/awesome-dsh-plugin.git"
-git push fork add-dsh-rampart --force
-git remote remove fork      # 立刻删，别让 token 留在 .git/config
-```
+> Grades free physical and commit memory and refuses heavy tools (...) before the
+> machine thrashes. Also shows in the composer how much of the machine dsh itself
+> is using, including whole-machine CPU.
 
-## 还差的两步
+PR 正文里也专门写了一节说明「为什么不写 CPU 参与分级」，省得审核来问。
 
-1. **开 PR**：`tataCrayon:add-dsh-rampart` → `awesome-dsh-plugin:main`
-   标题：`Add tataCrayon/dsh-rampart`
-   正文勾选 PR 模板的四项（一个文件 / 有 dsh.bundle / 仓库满 1 天 / category 合法 / 无夸大 / 有 topic）。
+## 顺带修掉的两个坑
 
-2. **把本仓库未提交的改动提交掉**（都改了内容，还没 commit）：
-   - `market/tataCrayon__dsh-rampart.yml` —— 描述改写（去掉「按 CPU 分级」的夸大）
-   - `PUBLISHING.md` —— 修正 main→master、加 tarball、测试数 72→93、补「描述与代码逐字对应」
-   - `README.md` —— 标题去 CPU、新增「分级依据（只有内存，没有 CPU）」小节
+1. **`PUBLISHING.md` 的图标 URL 写的是 `main`，会 404。** 本仓默认分支是 `master`。
+2. **全局 git 代理指向 `127.0.0.1:7897`，那个端口没进程在听。** 所有 git 操作
+   都要先卡 2 秒再报 `Failed to connect ... over proxy`。已 `git config --global --unset`
+   清掉两条 `http.https://github.com*.proxy`，现在直连。
 
-## 关键教训（别再踩）
+## 后续
 
-- **描述会被逐字对着代码核。** 初稿写「Grades memory **and CPU** pressure」，但
-  `gradeOf()` 只读 `warnFreeMemoryMb` / `criticalFreeMemoryMb` / `warnCommitMb` /
-  `criticalCommitMb` 四个内存阈值，`config.js` 里没有任何 CPU 阈值。CPU 全仓只用于显示。
-  这是夸大，会被打回。已改成「分级看内存、CPU 只显示」。
-- **图标分支是 master。** `PUBLISHING.md` 旧模板写的是 `main`，照抄会 404。
-- **`github:` 简写走 SSH，不走 HTTPS。** 市场卡片给陌生人的命令就是它，
-  所以 `tarball:` 不是可选项。
+- 合并后就等维护者 review，不需要再推任何东西。若被打 `held: author`，把修复推到
+  同一分支 + 留**一条**评论即可。
+- npm 仍未发布（`www.npmjs.com/login` → 403 `cf-mitigated: challenge`）。按
+  contributing.md「发不发布都不影响收录」，`repository` 字段已指回本仓库，
+  将来发布后映射会被自动采集。
