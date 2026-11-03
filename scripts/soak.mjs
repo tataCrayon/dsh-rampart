@@ -17,10 +17,34 @@ import { GradeTracker } from '../lib/pressure.js'
 const config = Config['~standard'].validate({}).value
 const win32 = await loadWin32(process.env)
 
+/**
+ * Win32 能力是否真的可用。
+ *
+ * 这份脚本有两组断言：热路径/门禁/迟滞（纯 JS，任何平台都能跑）和整树采样
+ * （必须真的能调 Win32）。后者在「装了宿主但没装 `dsh-win32-process`」的环境里
+ * 会以 `Cannot create proxy with a non-object as target` 这种毫无线索的方式挂掉 ——
+ * 报错指向 Proxy，不指向缺依赖。所以先探一下，缺能力就把那组标成 SKIP，
+ * 而不是让它伪装成代码缺陷。
+ */
+const hasWin32 = win32.available === true
+if (!hasWin32) {
+  console.log(`SKIP: Win32 能力不可用（${win32.error ?? 'unknown'}），整树采样相关断言跳过。`)
+  console.log('      要跑全量：npm install --no-save @deepseek-ai/dsh-win32-process@0.2.1-rc.2')
+}
+
 let failures = 0
 function check(ok, message) {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${message}`)
   if (!ok) failures += 1
+}
+
+/** 只在真有 Win32 能力时才断言；否则打印 SKIP 且不计入失败。 */
+function checkTree(ok, message) {
+  if (!hasWin32) {
+    console.log(`SKIP: ${message}`)
+    return
+  }
+  check(ok, message)
 }
 
 function mb(bytes) {
@@ -59,8 +83,8 @@ function mb(bytes) {
   const after = process.memoryUsage()
   const heapDelta = after.heapUsed - before.heapUsed
   console.log(`  100 次整树采样后：heapUsed Δ ${mb(heapDelta)} MB，最后一次 ${last?.processCount ?? 'null'} 进程`)
-  check(Math.abs(heapDelta) < 8 * 1048576, `树采样无明显泄漏（heap Δ ${mb(heapDelta)} MB < 8 MB）`)
-  check(last !== null && last.processCount >= 1, '树采样持续可用')
+  checkTree(Math.abs(heapDelta) < 8 * 1048576, `树采样无明显泄漏（heap Δ ${mb(heapDelta)} MB < 8 MB）`)
+  checkTree(last !== null && last.processCount >= 1, '树采样持续可用')
 }
 
 // ── 2b) 多窗口轮询：并发请求必须合并，不能各自冻结一次事件循环 ────────────
@@ -68,26 +92,30 @@ function mb(bytes) {
   // 每个窗口一个 StatusPill，各自独立 setInterval 打 /stats。旧实现是「每次请求都
   // 真采一次」，8 个窗口就是 8×15 ms 的同步冻结；这条守住「与窗口数解耦」。
   let enumerations = 0
-  const counting = {
-    ...win32,
-    api: new Proxy(win32.api, {
-      get(target, key) {
-        const value = target[key]
-        if (key !== 'createToolhelp32Snapshot') return value
-        return (...args) => {
-          enumerations += 1
-          return value.apply(target, args)
-        }
-      },
-    }),
-  }
+  // 没有 Win32 时 win32.api 是 undefined，包一层 Proxy 会抛
+  // 「Cannot create proxy with a non-object as target」—— 那是缺依赖，不是缺陷。
+  const counting = hasWin32
+    ? {
+        ...win32,
+        api: new Proxy(win32.api, {
+          get(target, key) {
+            const value = target[key]
+            if (key !== 'createToolhelp32Snapshot') return value
+            return (...args) => {
+              enumerations += 1
+              return value.apply(target, args)
+            }
+          },
+        }),
+      }
+    : win32
   const sampler = new TreeSampler({ win32: async () => counting, cores: 8, minIntervalMs: 1000 })
   await sampler.sample()
   const base = enumerations
   const waves = await Promise.all(Array.from({ length: 8 }, () => sampler.sample()))
   const afterBurst = enumerations - base
-  check(afterBurst === 0, `8 个窗口同时轮询只复用缓存（新增枚举 ${afterBurst} 次，期望 0）`)
-  check(new Set(waves).size === 1, '8 个并发请求拿到同一份读数')
+  checkTree(afterBurst === 0, `8 个窗口同时轮询只复用缓存（新增枚举 ${afterBurst} 次，期望 0）`)
+  checkTree(new Set(waves).size === 1, '8 个并发请求拿到同一份读数')
 }
 {
   const guardian = new ResourceGuardian({ config })

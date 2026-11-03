@@ -62,19 +62,26 @@ jobs:
       - name: Build client bundle
         run: npm run build:client
 
-      # 集成测试要真跑，就得有宿主依赖。这三个包由 DSH 本体提供，本仓库刻意**不声明**
+      # 集成测试要真跑，就得有宿主依赖。这几个包由 DSH 本体提供，本仓库刻意**不声明**
       # 它们 —— 声明等于把 DSH 的版本钉死在插件里，插件就只认那一版宿主了。所以只在
       # CI 里临时装，`--no-save` 不写进 package.json、不生成 lockfile。
       #
       # 版本精确钉到本机 DSH 0.2.1-rc.2 内部实际带的版本，不是 @latest：
-      # 集成测试断言的是「真实 cordis 流水线里 tools/pre-execute 门禁生效」，
-      # 宿主 API 一变这条断言就成了假话。装错版本时让它红，比悄悄跳过诚实得多。
+      # dsh-tools / dsh-system-prompt 的 dist-tags.latest 停在 0.0.1-rc.1，装 @latest
+      # 会拿到 API 不兼容的老版本，集成测试会以「查不到某个导出」的方式失败 ——
+      # 看起来像插件坏了，其实是装错了宿主。所以写死。
+      #
+      # dsh-win32-process 是给 soak 用的：没有它，整树采样那几条断言无从谈起。
+      # 它自己会带 koffi，而 koffi 的原生二进制由 optionalDependency
+      # `@koromix/koffi-win32-x64` 提供 —— 是预编译产物，**不需要** install script
+      # 现场编译，所以 runner 上不会因为缺 MSVC 而失败。
       - name: Install host deps for integration tests
         run: >-
           npm install --no-save --no-audit --no-fund
           @deepseek-ai/cordis@4.0.5
           @deepseek-ai/dsh-tools@0.2.1-rc.2
           @deepseek-ai/dsh-system-prompt@0.2.1-rc.2
+          @deepseek-ai/dsh-win32-process@0.2.1-rc.2
 
       - name: Unit tests
         run: npm test
