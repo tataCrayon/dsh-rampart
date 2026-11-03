@@ -1,0 +1,88 @@
+name: Publish to npm
+
+# 为什么不在本机 `npm publish`：
+#
+# 开发机的网络必须经过 VPN 才能访问 npm，而 VPN 是共享出口 IP，`registry.npmjs.org`
+# 直连超时、`www.npmjs.com` 会被 Cloudflare 挑战页挡住（IP 被判成机器人）。这不是
+# 配置问题，换 node、换 registry 都治不了。
+#
+# GitHub Actions 的 runner 跑在微软云上，出口 IP 干净，不经过任何 VPN、不需要代理，
+# 也不需要 `npm login` 的浏览器环节。所以发布搬到这边来。
+#
+# 触发方式只有两个，**push 到 master 不会自动发**——发布是对外不可撤销的动作，
+# 值得多一道人工确认。
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '只打包不真发（npm publish --dry-run）'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  # provenance 需要它：让 npm 生成一份「这个包确实由这个仓库的这次提交构建」的可验证证明。
+  id-token: write
+
+jobs:
+  publish:
+    # 必须是 Windows。插件的能力层依赖 Win32 API：`loadWin32()` 在非 win32 平台直接返回
+    # `{ available: false }`，于是 scripts/soak.mjs 里的整树采样断言（要求进程数 ≥ 1）
+    # 在 ubuntu runner 上必然失败。换成 Linux 不是「省点钱」，是「测不到真东西」。
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      # 刻意没有 `npm install`：package.json 里 dependencies 和 devDependencies 都是空的，
+      # 装了也只是凭空生成一个 lockfile、多一次网络往返、多一条供应链面。
+      - name: Preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e '
+            const pkg = require("./package.json");
+            const isTag = process.env.GITHUB_REF_TYPE === "tag";
+            const ref = process.env.GITHUB_REF_NAME || "";
+            if (isTag && ref !== "v" + pkg.version) {
+              console.error("tag " + ref + " 与 package.json 的 " + pkg.version + " 不匹配，拒绝发布");
+              process.exit(1);
+            }
+            console.log("将发布 " + pkg.name + "@" + pkg.version + (isTag ? "（tag " + ref + "）" : "（手动触发）"));
+          '
+
+      - name: Build client bundle
+        run: npm run build:client
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Soak probe
+        run: npm run soak
+
+      - name: Publish
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          # `--ignore-scripts` 是有意为之：prepublishOnly 里的 build/test/soak 上面三步
+          # 已经分别跑过了。跑两遍不但慢，还会让失败日志分不清是哪一步挂的。
+          if [ "$DRY_RUN" = "true" ]; then
+            npm publish --dry-run --access public --ignore-scripts
+            exit 0
+          fi
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::没有 secret NPM_TOKEN，无法发布。见 PUBLISHING.md 第 6 节。"
+            exit 1
+          fi
+          npm publish --access public --provenance --ignore-scripts

@@ -312,3 +312,105 @@ cmd /c mklink /J "$profile\node_modules\dsh-rampart" "D:\Projects\MyProjects\dsh
 | 仓库创建不满 1 天 | ✅ 2026-10-31 07:32:50Z 建，已满 1.97 天 |
 | 描述夸大 | ✅ 描述里的三件事都能在代码里指出来 |
 | 缺 `dsh-plugin` topic | ✅ 已打 |
+
+---
+
+## 8. 用 GitHub Actions 发布（绕开本机 VPN 与 Cloudflare）
+
+### 为什么不能在本机发
+
+本机要访问 npm 必须经过 VPN，而 VPN 出口是共享 IP，实测两条路都断：
+
+```
+registry.npmjs.org 直连            → 超时（ETIMEDOUT）
+www.npmjs.com/login 经代理          → 403 + Cf-Mitigated: challenge
+registry.npmjs.org 经代理           → 时通时不通（SSL handshake failed / HTTP 000）
+```
+
+而 `npm login --auth-type=legacy` 这条路**已经被 npm 服务端关了**：
+
+```
+npm notice Account creation via legacy auth is unavailable. Please set your
+         auth-type to "web" or visit https://www.npmjs.com/signup
+npm error code E403
+```
+
+所以发布搬到 GitHub Actions。runner 在微软云上，出口 IP 干净，不经过本机网络、不需要代理、也不需要浏览器的授权环节。
+
+### 文件
+
+`.github/workflows/publish.yml`，两个触发条件，**push 到 master 不会自动发**：
+
+| 触发 | 行为 |
+|---|---|
+| push tag `v*` | 真发布（tag 必须等于 `package.json` 的 version，否则 Preflight 拒绝） |
+| 手动 `workflow_dispatch` | 默认 `dry_run: true`，只打包不真发 |
+
+### 为什么必须 `windows-latest`
+
+不是随便选的。`lib/win32.js` 的 `loadWin32()` 在非 Windows 平台直接返回
+`{ available: false }`，于是 `scripts/soak.mjs` 里「树采样持续可用」那条断言
+（要求 `processCount >= 1`）在 ubuntu runner 上必然失败。
+换成 Linux 不是省钱，是测不到真东西。
+
+### 唯一需要你手做的一步：加 secret
+
+自动化能覆盖到「拿到 token 之后」的全部，但**造 token 这一步做不到** ——
+它必须在 `www.npmjs.com` 上完成，而那正是被 Cloudflare 挡住的地方。
+
+所以需要你在**任意一台能打开 npm 网站的机器**（手机开 VPN 也行）上：
+
+1. 登录 npm
+2. 头像 → **Access Tokens** → **Generate New Token** → **Classic Token**
+3. 类型选 **Automation**（专给 CI 用，不会弹 2FA）
+4. 复制那串 `npm_…`（只显示一次）
+
+然后回到仓库网页：
+
+**Settings → Secrets and variables → Actions → New repository secret**
+
+- Name: `NPM_TOKEN`
+- Secret: 粘贴
+
+或者用 `gh` 一条命令：
+
+```powershell
+gh secret set NPM_TOKEN --repo tataCrayon/dsh-rampart
+```
+
+### 发布步骤
+
+```powershell
+# 1) 先手动跑一次 dry run，确认七步全绿（不会真发）
+gh workflow run publish.yml --repo tataCrayon/dsh-rampart -f dry_run=true
+
+# 2) 看日志
+gh run list --workflow=publish.yml --repo tataCrayon/dsh-rampart --limit 3
+
+# 3) 真发
+gh workflow run publish.yml --repo tataCrayon/dsh-rampart -f dry_run=false
+```
+
+### 为什么带 `--provenance`
+
+`permissions.id-token: write` + `npm publish --provenance` 会让 npm 生成一份可验证的
+构建证明，把「这个 tarball 由这个仓库的这次提交构建」写进 registry 元数据。
+对陌生人来说这是「它确实来自源码」的凭据，成本只有几行配置。
+
+### 为什么带 `--ignore-scripts`
+
+`package.json` 的 `prepublishOnly` 会跑 `build:client && test && soak`。workflow 里
+这三步已经**分别**跑过了（失败时日志能分清是哪一步挂的）。再让 npm 跑一遍不只慢一倍，
+还会让真实失败被埋在 `prepublishOnly` 这一层包装里。
+
+### 验证它真的成了
+
+```powershell
+# 不需要浏览器，registry API 就够
+curl.exe -sS https://registry.npmjs.org/dsh-rampart | Select-Object -First 1
+# 或
+npm view dsh-rampart version dist.tarball dist.integrity
+```
+
+`npm view` 走的是 registry，不走 www.npmjs.com，所以本机 VPN 下也能查。
+
