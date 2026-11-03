@@ -1,0 +1,63 @@
+name: npm access probe
+
+# 只为回答一个问题：**GitHub runner 到底能不能打开 www.npmjs.com。**
+#
+# 背景：开发机的网络必须过 VPN 才能到 npm，而 VPN 出口是共享 IP，被 Cloudflare
+# 判成机器人 —— www.npmjs.com 返回 403 + `Cf-Mitigated: challenge`，连手机开 VPN
+# 也一样。于是「注册 npm 账号」「造 token」这两步都卡死。
+#
+# 但 runner 在微软云上，出口 IP 干净。如果它**没**被挑战，那注册/造 token 这两步
+# 就有可能在 runner 里做掉，不需要任何人手工登录。这个 workflow 就是来测这一点的。
+#
+# 只读、只打印状态码与响应头，不提交任何表单、不创建任何账号。
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    steps:
+      - name: Probe npm endpoints
+        shell: pwsh
+        run: |
+          $targets = @(
+            'https://registry.npmjs.org/-/ping',
+            'https://registry.npmjs.org/dsh-rampart',
+            'https://www.npmjs.com/',
+            'https://www.npmjs.com/signup',
+            'https://www.npmjs.com/login'
+          )
+          foreach ($u in $targets) {
+            try {
+              $r = Invoke-WebRequest -Uri $u -Method Head -MaximumRedirection 0 `
+                     -SkipHttpErrorCheck -TimeoutSec 25 -ErrorAction Stop
+              $mitigated = $r.Headers['Cf-Mitigated']
+              Write-Host ("{0,-48} {1}  cf-mitigated={2}" -f $u, $r.StatusCode, ($mitigated ?? '-'))
+            } catch {
+              Write-Host ("{0,-48} ERR {1}" -f $u, $_.Exception.Message)
+            }
+          }
+
+      # 关键：如果 signup 是 200，说明 runner 能过；如果也是 403 challenge，
+      # 说明限制跟着账号/地区走，换 IP 也没用，这条路直接封死。
+      - name: Probe signup with a browser user-agent
+        shell: pwsh
+        run: |
+          $ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+                '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+          try {
+            $r = Invoke-WebRequest -Uri 'https://www.npmjs.com/signup' -TimeoutSec 25 `
+                   -UserAgent $ua -SkipHttpErrorCheck -ErrorAction Stop
+            Write-Host ("signup(browser UA) -> {0}  length={1}  cf-mitigated={2}" -f `
+              $r.StatusCode, $r.Content.Length, ($r.Headers['Cf-Mitigated'] ?? '-'))
+            # 页面里有没有表单字段，决定「能不能不带浏览器完成注册」
+            foreach ($needle in 'name="name"', 'name="email"', 'name="password"', 'csrf') {
+              Write-Host ("  contains {0}: {1}" -f $needle, ($r.Content -match [regex]::Escape($needle)))
+            }
+          } catch {
+            Write-Host ("signup(browser UA) -> ERR {0}" -f $_.Exception.Message)
+          }
