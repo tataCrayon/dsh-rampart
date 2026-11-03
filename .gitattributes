@@ -1,0 +1,18 @@
+# 统一行尾为 LF，且不依赖各人/各机器的 core.autocrlf。
+#
+# 为什么需要它：GitHub 的 windows-latest runner 上 core.autocrlf 默认是 true，
+# checkout 出来的文本文件会变成 CRLF，于是 `npm pack` 打出的 tarball 与本地
+# 那份**字节不同**。实测同一份代码：
+#
+#   本地 npm pack       → shasum c86f0977…  73874 B
+#   runner 上打包(dry)  → shasum 3bcfeb63…  ~74.9 kB
+#
+# 两边的功能一样，但「CI 发出的包」与「我验过的包」不是同一份字节，
+# 这会让 Release 资产与 npm 上的产物对不上，也让 shasum 校验失去意义。
+#
+# `eol=lf` 的优先级高于 core.autocrlf，所以这一条就够，不需要每个人改 git 配置。
+* text=auto eol=lf
+
+# 二进制文件不要让 git 碰
+*.png binary
+*.tgz binary
