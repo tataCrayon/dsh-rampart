@@ -2,9 +2,16 @@
 
 **PR：[awesome-dsh-plugin#11542](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/11542)**
 标题 `Add tataCrayon/dsh-rampart`，分支 `tataCrayon:add-dsh-rampart` → `awesome-dsh-plugin:main`，
-提交 `0b110c0`，改动 1 个文件 `data/plugins/tataCrayon__dsh-rampart.yml`（+30 行）。
+提交 `64c3507`，改动 1 个文件 `data/plugins/tataCrayon__dsh-rampart.yml`（+11 行）。
 
-2026-11-03 12:30 实测：
+> 分支 head 仓库是 **`tataCrayon/awesome-dsh-plugin`**（市场仓的 fork），
+> **不是** `tataCrayon/dsh-rampart`（插件仓）。两者同名不同物，推错会污染插件仓库。
+
+## 标题
+
+为什么**不重开**一个 PR：见文末「为什么不重开 PR」。
+
+2026-11-03 12:30 首次实测：
 
 | 项 | 结果 |
 |---|---|
@@ -65,3 +72,59 @@ PR 正文里也专门写了一节说明「为什么不写 CPU 参与分级」，
 - npm 仍未发布（`www.npmjs.com/login` → 403 `cf-mitigated: challenge`）。按
   contributing.md「发不发布都不影响收录」，`repository` 字段已指回本仓库，
   将来发布后映射会被自动采集。
+
+---
+
+## 2026-11-03 14:35 第二轮：注释 22 行压到 3 行
+
+`tataCrayon__dsh-rampart.yml` 原来带 22 行注释。全市场 8282 条里只有 129 条带注释，
+中位数 3 行，**我这条是全市场注释最多的**（第二多 21 行）。规则没禁止、CI 也过了，
+但那是噪音。已压到 3 行，正文 7 行不变。
+
+验证「只删注释、没动字段」不是靠肉眼——用市场仓自己的 `js-yaml` 把新旧两版都解析成
+对象，逐键比对：
+
+```
+旧版键: category, description, icon, name, tarball, url
+新版键: category, description, icon, name, tarball, url
+✅ 字段值逐字相同，只删了注释
+```
+
+精简后重跑 gate：`{"ok": true, "checked": 1, "failures": [], "incomplete": []}`。
+
+用的是一次 `git commit --amend` 而不是叠一个 fixup 提交，分支上仍然只有一个提交
+（`64c3507`，父提交就是 `origin/main` 的 `152f265`）。
+
+## 为什么不重开 PR
+
+问过「是不是重开一个 PR 严格检查规范更好」。结论是**不重开，重开会更差**，理由都是可查的：
+
+1. **规则明说不用重开。** contributing.md:167：「Push a fix to the same branch —
+   no need to open a new PR.」重开反而违背它。
+2. **CI 不读 PR 正文。** 在 `.github/workflows` 里 `select-string 'pull_request.body'` 无命中 ——
+   勾选框、正文全是给人看的，形式检查只看文件。所以「换个更规范的 PR 正文」对通过率零影响。
+3. **查重是审核第 4 条，靠改 PR 治不了。** contributing.md:92 明说 CI「无法判断……是否与
+   已有条目重复」。重复了就是重复了，重开十次也一样。已确认不重复，见下。
+4. **重开要重新排队。** 当前 291 个 open PR；我的 #11542 之后只有 1 个更新编号。
+   重开会拿到 ~11581，把 39 个 PR 排到自己前面。
+5. **维护者按质量放过，不按编号。** 最近合并的样本里有 `#10640`（10-30 开）在
+   `#11204`（11-01 开）之后才合，说明不是 FIFO。
+
+而且「不重开」还有一条硬理由：**已经绿过的 CI 记录是资产**，重开就清零。本轮推
+`64c3507` 后 CI 从 06:29:58Z 重新跑到 `unstable`，就是为了保住同一个 PR 的上下文。
+
+## 查重结论（审核第 4 条）
+
+搜了全市场 8282 条，**同时**命中「宿主内存」与「拦/拒」的条目里，最接近的是
+`elegant01__dsh-memory-watchdog.yml`（Windows 提交内存看门狗）。逐字段比：
+
+| 能力 | dsh-memory-watchdog | dsh-rampart |
+|---|---|---|
+| 采样提交内存 | ✅ 每 5 秒 | ✅ |
+| 归因到进程树 | ✅ | ✅ |
+| 拦工具 / 拒绝重活 | ❌ | ✅ |
+| 降优先级 below-normal | ❌ | ✅ |
+
+它在 `en` 描述里对 `refus|block.{0,20}tool|deny` 三项全不命中，也不提 priority ——
+两者不重叠，不是「已被覆盖」。真正同类的 `dsh-memory-guard` / `dsh-concurrency-guard`
+一个是本地堆与 session log、一个是并发 FIFO 队列，也都不做「按宿主内存拦重活」。
