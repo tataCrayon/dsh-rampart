@@ -1,6 +1,7 @@
 # dsh-rampart
 
-给 DeepSeek Harness 加一层**内存/CPU 压力护栏**：机器快被吃穿时先踩刹车，而不是等它卡死。
+给 DeepSeek Harness 加一层**内存压力护栏**：机器快被吃穿时先踩刹车，而不是等它卡死。
+CPU 占比只显示、不参与分级 —— `gradeOf()` 只看四个内存阈值，见下文「分级依据」。
 
 > **rampart** = 城墙的外围防御墙。采样压力、到线就拦重活、真到缺内存时把宿主降到 below-normal ——
 > 都是在机器被压垮之前筑一道墙。
@@ -112,6 +113,21 @@ node scripts\launch.mjs --cap 12000 --low-priority
 | `heavyPatterns` | `['job_*']` | 通配名单 |
 | `showStatusPill` | `true` | 是否挂输入框下方的读数条 + `/rampart/api/*` 路由 |
 | `statusPillIntervalMs` | 2000 | 读数条轮询间隔；低于 500 会被夹到 500 |
+
+### 分级依据（只有内存，没有 CPU）
+
+`gradeOf()` 只读上面四个内存阈值，**CPU 不参与任何判定**：
+
+| 输入 | 参与分级？ | 用在哪 |
+|---|---|---|
+| 可用物理内存 | ✅ | `warnFreeMemoryMb` / `criticalFreeMemoryMb` |
+| 可用提交内存 | ✅ | `warnCommitMb` / `criticalCommitMb` |
+| 整机 CPU 占比 | ❌ | 只画进读数条与面板 |
+| DSH 进程树 CPU | ❌ | 只画进读数条与面板 |
+
+这不是漏了，是刻意的：CPU 高只是慢，内存见底是整机进入换页风暴、连 shell 都拉不起来。
+护栏要挡的是后者。Kubernetes 的节点压力驱逐也是同一个取舍 —— 宁可慢，不可死。
+若确实要按 CPU 拦，把 `workflow` 之类的工具移出 `heavyTools` 名单是当前唯一的手段。
 
 **为什么默认值这么保守**：本机实测物理 32 GB、可用长期 2.7~3.3 GB（约 9%），提交内存同量级。
 误拦一条重活只是慢一点；漏拦一次重活是整机卡死。所以宁可早拦。

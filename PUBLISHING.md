@@ -166,9 +166,13 @@ npm pack --dry-run              # 看一眼真的会打包哪些文件
 启动壳的三个文件、`assets/icon-180.png`、`README.md`、`LICENSE`。
 `deploy-desktop.md` / `PUBLISHING.md` 是本机现场记录，**不发布**（含本机路径）。
 
-> 不发 npm 也能用：`dsh plugin add github:tataCrayon/dsh-rampart` 直接从 git 装。
-> 但**市场条目的 `source.type: "npm"` 需要真发到 registry**；给 git 源就得在版本里
-> 写 40 位 commit SHA（发了新提交就要改索引，维护成本高）。所以建议发 npm。
+> 不发 npm 也能用，而且是**市场接受**的做法：把 `npm pack` 的产物传到 GitHub Release，
+> 条目里用 `tarball:` 指向它即可（`tarball` 是条目的一等字段，市场站点会优先展示
+> 它而不是 git 命令）。`npm pack` 不需要登录 —— 实测在未登录状态下也能产出完整包。
+>
+> 反过来，**只给 git 源对陌生人不友好**：npm 把 `github:owner/repo` 解析成
+> `ssh://git@github.com/owner/repo.git`（本仓用 `GIT_TRACE=1` 实测），没配 GitHub SSH
+> 密钥的人直接 `Permission denied (publickey)`。所以 tarball 不是锦上添花，是必需。
 
 ---
 
@@ -182,17 +186,27 @@ npm pack --dry-run              # 看一眼真的会打包哪些文件
 url: https://github.com/tataCrayon/dsh-rampart
 name: tataCrayon/dsh-rampart
 category: dev
+tarball: https://github.com/tataCrayon/dsh-rampart/releases/download/v0.2.0/dsh-rampart.tgz
 description:
-  en: 'Grades memory and CPU pressure on the machine running dsh and refuses heavy tools (shell, workflow, subagent) before it thrashes, then shows in the composer how much of the machine DSH itself is using.'
-  zh: '按整机内存/CPU 压力分级，到线就拦重活（shell、workflow、subagent），并在输入框下方显示 DSH 自己占用了多少整机资源。'
-icon: https://raw.githubusercontent.com/tataCrayon/dsh-rampart/main/assets/icon-180.png
+  en: 'Grades free physical and commit memory and refuses heavy tools (shell, workflow, subagent) before the machine thrashes. Also shows in the composer how much of the machine dsh itself is using, including whole-machine CPU.'
+  zh: '按可用物理内存与提交内存分级，到线就拦重活（shell、workflow、subagent）。并在输入框旁显示 DSH 自己占用了整机多少资源，含整机 CPU 占比。'
+icon: https://raw.githubusercontent.com/tataCrayon/dsh-rampart/master/assets/icon-180.png
 ```
 
 要点：
 - 描述里含 `: ` 必须加引号（否则 YAML 解析成嵌套键）—— 上面已经包了。
 - `category` 取**实际做的事**：`dev`（开发与运行时）。不是 `ui`（UI 只是它的一半）。
-- 仓库需**创建满 1 天**、有真代码、带 `dsh-plugin` topic。本条 PR 建议**明天再提**。
-- 描述必须与代码相符 —— 审核会数。上面这句对得上：分级、拦重活、显示占比，三件都在。
+- 分支是 **`master`**，不是 `main`。两个 `icon` URL 都踩过：写 `main` 会 404
+  （API 实测 `contents/assets/icon-180.png?ref=main` → 404，`?ref=master` → 1407 字节）。
+- `tarball` 的资产名**不要带版本号**，靠 `/releases/download/v0.2.0/` 这个路径钉版本。
+  带版本号又挂在 `/releases/latest/` 下的写法，下次发版就 404 —— 市场脚本
+  `probe-tarballs.mjs` 会专门把这种标成「会在下次发版时烂掉」。
+- 仓库需**创建满 1 天**（已于 2026-11-01 15:32 北京时间满足）、有真代码、带 `dsh-plugin` topic。
+- **描述必须与代码逐字对得上，审核真的会数。** 这里踩过一次：初稿写的是
+  「Grades whole-machine memory **and CPU** pressure」，但 `gradeOf()` 只读四个
+  阈值 —— `warnFreeMemoryMb` / `criticalFreeMemoryMb` / `warnCommitMb` /
+  `criticalCommitMb`，`config.js` 里**没有任何 CPU 阈值**。CPU 全仓只用于显示。
+  按初稿提交就是夸大，会被打回。改成「分级看内存、CPU 只显示」才对得上。
 
 ---
 
@@ -210,10 +224,10 @@ format-1 索引（放 GitHub Pages / jsDelivr / 任意 https 静态托管）：
       "name": "dsh-rampart",
       "title": { "en": "Rampart", "zh": "资源护栏" },
       "description": {
-        "en": "Memory and CPU pressure guard: grades pressure, refuses heavy tools, shows how much of the machine dsh uses.",
-        "zh": "内存/CPU 压力护栏：分级、拦重活、显示 dsh 占用了整机多少。"
+        "en": "Memory pressure guard: grades free physical and commit memory, refuses heavy tools, and shows how much of the machine dsh uses.",
+        "zh": "内存压力护栏：按可用物理/提交内存分级、拦重活，并显示 dsh 占用了整机多少。"
       },
-      "icon": "https://raw.githubusercontent.com/tataCrayon/dsh-rampart/main/assets/icon-180.png",
+      "icon": "https://raw.githubusercontent.com/tataCrayon/dsh-rampart/master/assets/icon-180.png",
       "author": "tataCrayon",
       "homepage": "https://github.com/tataCrayon/dsh-rampart",
       "repository": { "url": "https://github.com/tataCrayon/dsh-rampart" },
@@ -221,7 +235,11 @@ format-1 索引（放 GitHub Pages / jsDelivr / 任意 https 静态托管）：
         {
           "version": "0.2.0",
           "publishTimestamp": 1793491200,
-          "source": { "type": "npm" },
+          "source": {
+            "type": "git",
+            "url": "https://github.com/tataCrayon/dsh-rampart",
+            "commit": "cf75370d73e03df81460b05237c381d4c8a5fa65"
+          },
           "engines": { "dsh": ">=0.2.1-rc.1" }
         }
       ]
@@ -290,7 +308,7 @@ cmd /c mklink /J "$profile\node_modules\dsh-rampart" "D:\Projects\MyProjects\dsh
 |---|---|
 | 只声明 `dsh.client`，没有 `dsh.bundle` | ✅ 两个都有 |
 | 没有 `cordis.patch.yml` | ✅ 有，且与包名一致 |
-| 占位仓库 / 纯 README | ✅ 有实现、有 72 条测试、有真机验收脚本 |
-| 仓库创建不满 1 天 | ⚠️ 今天刚建 → **明天再提 PR** |
+| 占位仓库 / 纯 README | ✅ 有实现、有 93 条测试、有真机验收脚本 |
+| 仓库创建不满 1 天 | ✅ 2026-10-31 07:32:50Z 建，已满 1.97 天 |
 | 描述夸大 | ✅ 描述里的三件事都能在代码里指出来 |
 | 缺 `dsh-plugin` topic | ✅ 已打 |
