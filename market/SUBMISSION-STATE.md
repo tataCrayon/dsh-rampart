@@ -4,6 +4,9 @@
 标题 `Add tataCrayon/dsh-rampart`，分支 `tataCrayon:add-dsh-rampart` → `awesome-dsh-plugin:main`，
 提交 `64c3507`，改动 1 个文件 `data/plugins/tataCrayon__dsh-rampart.yml`（+11 行）。
 
+> **已于 2026-11-03T17:03:02Z 合并。** 条目已在 `main` 上，站点卡片已生成。
+> npm 仍是 null —— 这不影响收录，但会挡住 App 内 Discover（见文末）。
+
 > 分支 head 仓库是 **`tataCrayon/awesome-dsh-plugin`**（市场仓的 fork），
 > **不是** `tataCrayon/dsh-rampart`（插件仓）。两者同名不同物，推错会污染插件仓库。
 
@@ -15,7 +18,7 @@
 
 | 项 | 结果 |
 |---|---|
-| PR 状态 | `open` |
+| PR 状态 | `open` → **`merged`**（17:03:02Z） |
 | `mergeable_state` | **`clean`**（可合并，无冲突、无待改） |
 | CI run 41576479380 | **`completed / success`** |
 | 改动文件数 | 1（没碰 README，符合要求） |
@@ -128,3 +131,66 @@ PR 正文里也专门写了一节说明「为什么不写 CPU 参与分级」，
 它在 `en` 描述里对 `refus|block.{0,20}tool|deny` 三项全不命中，也不提 priority ——
 两者不重叠，不是「已被覆盖」。真正同类的 `dsh-memory-guard` / `dsh-concurrency-guard`
 一个是本地堆与 session log、一个是并发 FIFO 队列，也都不做「按宿主内存拦重活」。
+
+---
+
+## 2026-11-04 合并后的实测状态
+
+### 已经生效的
+
+| 事实 | 证据 |
+|---|---|
+| 条目在 `main` 上 | `data/plugins/tataCrayon__dsh-rampart.yml`，1164 B，sha `526160a1` |
+| 站点详情页已生成 | `https://awesome-dsh-plugin.com/p/tataCrayon/dsh-rampart/` → HTTP 200 |
+| 中文页已生成 | `/zh/p/tataCrayon/dsh-rampart/` 同样 200 |
+| 分类页收录 | `/dev/` 的 JSON-LD ItemList 第 406 项 = `tataCrayon/dsh-rampart` |
+| 站点数据已含我们 | `plugins.json` 8655 条里能找到，字段见下 |
+| sync-readme 跑过 | 2026-11-03T23:15:52Z `completed/success` |
+
+`plugins.json` 里我们那条：
+
+```json
+{
+  "name": "dsh-rampart", "owner": "tataCrayon", "category": "dev",
+  "npm": null, "version": null, "stars": null, "downloads": null,
+  "tarball": "https://github.com/tataCrayon/dsh-rampart/releases/download/v0.2.0/dsh-rampart.tgz",
+  "install": "dsh plugin --profile web add \"https://…/v0.2.0/dsh-rampart.tgz\"",
+  "added": "2026-11-03",
+  "capabilities": ["shell", "dynamic-code", "fs-read", "network", "env"],
+  "capabilityRedLines": []
+}
+```
+
+**站点给的安装命令就是 tarball URL**，不是 npm 短名 —— 陌生人照抄就能装。
+这正是当初把 `tarball` 写进条目要的效果，已经兑现。
+
+### 还缺的一环：App 内 Discover 收不到我们
+
+`docs/index.json` 是 DSH「Plugins → Discover」读的那个 format-1 索引。
+实测它只有 **4386** 条，而站点 `plugins.json` 有 **8655** 条。差的 4269 条正是
+「没有 npm 包」的那些，一条都没进。
+
+读了生成逻辑，不是 bug，是硬条件 —— `scripts/lib/market-index.mjs`：
+
+```js
+const record = npmMap[entry.url]
+if (typeof record?.npm !== 'string' || record.npm === '') { skipped.noNpm += 1; continue }
+if (typeof record.version !== 'string' || record.version === '') { skipped.noVersion += 1; continue }
+if (!Number.isInteger(record.publishedAt)) { skipped.noPublishTime += 1; continue }
+```
+
+format-1 索引的 `source` 只有 `npm` 和 `git` 两种，而 `git` 那条要 40 位 commit
+且安装 spec 会被拼成 `git+https://…#<commit>`。**`tarball` 不是索引格式里的类型**
+（它是 `dsh plugin add` 命令行层支持的）。所以：
+
+> 没有 npm 包 ⇒ `npmMap` 里没有 `npm` 字段 ⇒ `skipped.noNpm` ⇒ 进不了 `index.json`
+> ⇒ 在 DSH 的 Discover 里搜不到，只能从网站复制那条 tarball 命令手动装。
+
+这不是我们能绕的。要让插件出现在 App 内的市场里，唯一的路仍然是往
+`registry.npmjs.org` 发一个包 —— 而本机现在连 registry 都超时（见 PUBLISHING.md §8）。
+
+### 能做的补偿
+
+站点详情页、分类页、`/zh/` 中文页都已生成，安装命令正确。所以**从网页发现 →
+复制命令 → 安装**这条链是通的，只是缺了「在 App 里直接搜到」这一步。
+如果有人要装，把详情页链接发过去比什么都快。
