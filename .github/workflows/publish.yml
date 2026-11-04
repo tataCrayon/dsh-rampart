@@ -110,15 +110,23 @@ jobs:
           # legacy 登录打的是 registry 的 /-/user/org.couchdb.user:<name>，
           # 不需要 www.npmjs.com、不需要浏览器、不需要邮箱验证码。
           # 响应里只有 token 和 ok，密码不会回显。
+          #
+          # 刻意**不用** `--fail-with-body`：401 时我们正需要读 body 里的 error 字段，
+          # 才能区分「密码错」「账号不存在」「要 2FA」。curl 一 fail 就把 body 丢了。
           body=$(printf '{"name":"%s","password":"%s"}' "$NPM_USER" "$NPM_PASS")
-          resp=$(curl -sS --fail-with-body --max-time 60 \
+          resp=$(curl -sS --max-time 60 \
                  -X PUT "https://registry.npmjs.org/-/user/org.couchdb.user:${NPM_USER}" \
                  -H 'content-type: application/json' -d "$body")
           token=$(printf '%s' "$resp" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(j.token??"")}catch{process.stdout.write("")}})')
           if [ -z "$token" ]; then
-            echo "::error::登录没返回 token。可能是 2FA 或密码不对。"
-            # 只打印错误字段，绝不打印 resp 全文（避免把凭据写进日志）
-            printf '%s' "$resp" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log("error:",j.error??"?")}catch{console.log("non-json response")}})'
+            # 只打印 error 字段，绝不打印 resp 全文（避免把凭据写进日志）
+            err=$(printf '%s' "$resp" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(String(j.error??j.code??"unknown"))}catch{process.stdout.write("non-json")}})')
+            echo "::error::登录失败，error=${err}"
+            case "$err" in
+              *otp*|*one-time*) echo "→ 该账号开了 2FA，需要认证器 App 的 6 位码，不是邮箱验证码。" ;;
+              *invalid*)        echo "→ 用户名或密码不对（也可能是账号不存在）。" ;;
+              *)                echo "→ 未识别的错误，见上面的 error 字段。" ;;
+            esac
             exit 1
           fi
           echo "::add-mask::$token"
