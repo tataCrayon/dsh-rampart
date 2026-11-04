@@ -107,6 +107,9 @@ jobs:
             echo "::error::没有 NPM_USER / NPM_PASS secret，无法登录。"
             exit 1
           fi
+          # 只打印长度，不打印值 —— 用来确认 secret 真的传过来了、没被截断或加尾巴。
+          # 密码是 libsodium sealed box 加密后写进 secret 的，这一步顺便验证那条链路没出错。
+          echo "凭据长度：user=${#NPM_USER} pass=${#NPM_PASS}"
           # legacy 登录打的是 registry 的 /-/user/org.couchdb.user:<name>，
           # 不需要 www.npmjs.com、不需要浏览器、不需要邮箱验证码。
           # 响应里只有 token 和 ok，密码不会回显。
