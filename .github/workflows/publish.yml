@@ -89,21 +89,57 @@ jobs:
       - name: Soak probe
         run: npm run soak
 
+      # 为什么这里存的是账号密码而不是 token：
+      # 开发机连不上 registry.npmjs.org（Cloudflare 的 104.16.x 整段在本地被断，
+      # TCP 层就超时），所以拿不到 token。而 runner 的网络是通的 —— 于是把凭据
+      # 交给 runner，由它在干净网络上换成 token，token 不离开这个 job。
+      #
+      # 换来的 token 只写进 GITHUB_ENV 的 NODE_AUTH_TOKEN，不打印、不落 artifact。
+      - name: Mint npm token from credentials
+        if: ${{ inputs.dry_run != true }}
+        shell: bash
+        env:
+          NPM_USER: ${{ secrets.NPM_USER }}
+          NPM_PASS: ${{ secrets.NPM_PASS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NPM_USER:-}" ] || [ -z "${NPM_PASS:-}" ]; then
+            echo "::error::没有 NPM_USER / NPM_PASS secret，无法登录。"
+            exit 1
+          fi
+          # legacy 登录打的是 registry 的 /-/user/org.couchdb.user:<name>，
+          # 不需要 www.npmjs.com、不需要浏览器、不需要邮箱验证码。
+          # 响应里只有 token 和 ok，密码不会回显。
+          body=$(printf '{"name":"%s","password":"%s"}' "$NPM_USER" "$NPM_PASS")
+          resp=$(curl -sS --fail-with-body --max-time 60 \
+                 -X PUT "https://registry.npmjs.org/-/user/org.couchdb.user:${NPM_USER}" \
+                 -H 'content-type: application/json' -d "$body")
+          token=$(printf '%s' "$resp" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(j.token??"")}catch{process.stdout.write("")}})')
+          if [ -z "$token" ]; then
+            echo "::error::登录没返回 token。可能是 2FA 或密码不对。"
+            # 只打印错误字段，绝不打印 resp 全文（避免把凭据写进日志）
+            printf '%s' "$resp" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log("error:",j.error??"?")}catch{console.log("non-json response")}})'
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          echo "NODE_AUTH_TOKEN=$token" >> "$GITHUB_ENV"
+          echo "已取得 npm token（长度 ${#token}），已登记为 mask。"
+
       - name: Publish
         shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          DRY_RUN: ${{ inputs.dry_run }}
+          TOKEN_FROM_CREDS: ${{ inputs.dry_run != true }}
         run: |
           set -euo pipefail
           # `--ignore-scripts` 是有意为之：prepublishOnly 里的 build/test/soak 上面三步
           # 已经分别跑过了。跑两遍不但慢，还会让失败日志分不清是哪一步挂的。
-          if [ "$DRY_RUN" = "true" ]; then
+          if [ "${TOKEN_FROM_CREDS}" != "true" ]; then
             npm publish --dry-run --access public --ignore-scripts
             exit 0
           fi
           if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "::error::没有 secret NPM_TOKEN，无法发布。见 PUBLISHING.md 第 6 节。"
+            echo "::error::没有可用的 npm token（NPM_TOKEN secret 或刚换到的都为空）。"
             exit 1
           fi
           npm publish --access public --provenance --ignore-scripts
