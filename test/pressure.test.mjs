@@ -11,10 +11,12 @@ import assert from 'node:assert/strict'
 
 import {
   GradeTracker,
+  applyReserve,
   decideCall,
   gradeOf,
   isHeavyTool,
   normalizeSnapshot,
+  reserveCeilingMb,
   wildcardToRegExp,
 } from '../lib/pressure.js'
 
@@ -162,4 +164,80 @@ test('decideCall：轻工具在任何等级都不受影响', () => {
   for (const grade of ['normal', 'warn', 'critical']) {
     assert.deepEqual(decideCall({ grade, toolName: 'read', policy }), { action: 'allow' })
   }
+})
+
+// ── 预占额度（reserveMemoryMb）────────────────────────────────────────────
+
+test('applyReserve：可用量扣掉额度，原始值留在 *BeforeReserve 上', () => {
+  const shifted = applyReserve(snap(3000, 5000), 1024)
+  assert.equal(shifted.availPhysMb, 1976)
+  assert.equal(shifted.availCommitMb, 3976)
+  assert.equal(shifted.availPhysMbBeforeReserve, 3000, '原始读数必须留着，否则拒绝原因没法交代')
+  assert.equal(shifted.availCommitMbBeforeReserve, 5000)
+  assert.equal(shifted.reserveMb, 1024)
+})
+
+test('applyReserve：额度为 0 时是恒等变换（不改变判定结果）', () => {
+  const base = snap(3000, 5000)
+  const shifted = applyReserve(base, 0)
+  assert.equal(shifted.availPhysMb, base.availPhysMb)
+  assert.equal(shifted.availCommitMb, base.availCommitMb)
+  assert.equal(gradeOf(shifted, THRESHOLDS), gradeOf(base, THRESHOLDS))
+})
+
+test('applyReserve：额度超过当前空闲时被夹到空闲，而不是把重活额度归零', () => {
+  // 空闲 600 MB 却要预占 2048 MB：多出来的 1448 MB 是空气。旧实现会扣成 0，
+  // 于是重活视角永远 critical，用户看到的是「还有 600 MB 却什么都调不动」。
+  const shifted = applyReserve(snap(600, 900), 2048)
+  assert.equal(shifted.reserveMb, 600, '实际生效额度被夹到空闲')
+  assert.equal(shifted.reserveConfiguredMb, 2048, '填进去的原值要留着，面板才能说清为什么不够')
+  assert.equal(shifted.availPhysMb, 0)
+  assert.equal(shifted.availCommitMb, 300, '提交量按夹后的 600 扣，而不是按 2048 扣成 0')
+  assert.equal(shifted.loadPercent, 100)
+})
+
+test('reserveCeilingMb：上限就是当前可用物理，再受固定天花板约束', () => {
+  assert.equal(reserveCeilingMb(snap(1700, 8192)), 1700)
+  assert.equal(reserveCeilingMb(snap(1700, 8192), 8192), 1700, '空闲比天花板小时取空闲')
+  assert.equal(reserveCeilingMb(snap(9000, 8192), 8192), 8192, '空闲比天花板大时取天花板')
+  // 总量读不到（非 Win32 / 能力层缺失）：没有可信空闲值，不能把上限压成 0，
+  // 否则所有非 Windows 环境下「调大预占」都会失败。
+  assert.equal(reserveCeilingMb(normalizeSnapshot({ availPhysMb: 0 }), 8192), 8192)
+})
+
+test('applyReserve：提交量未知（0）不能被减成「耗尽」', () => {
+  // commit=0 的含义是「这一项拿不到」。若直接减额度，0 会被夹成 0，
+  // 而 gradeOf 把 commit>0 当已知 —— 这条守着「未知不等于耗尽」。
+  const shifted = applyReserve(snap(3000, 0), 1024)
+  assert.equal(shifted.availCommitMb, 0)
+  assert.equal(gradeOf(shifted, THRESHOLDS), 'warn', '只看物理：3000-1024=1976 < warn 2048')
+})
+
+test('预占的意义：系统还够用时，重活先被拦下（把最后一块留给轻活）', () => {
+  // 原始 2600 MB 在 warn 阈值（2048）之上，本该放行；
+  // 扣掉 1024 后剩 1576 MB，已经越过 warn 线。
+  const base = snap(2600, 8192)
+  assert.equal(gradeOf(base, THRESHOLDS), 'normal')
+  assert.equal(gradeOf(applyReserve(base, 1024), THRESHOLDS), 'warn')
+
+  // 再紧一点：原始读数仍是 normal，重活视角已是 critical。
+  const tighter = snap(2000, 8192)
+  assert.equal(gradeOf(tighter, THRESHOLDS), 'warn')
+  assert.equal(gradeOf(applyReserve(tighter, 1024), THRESHOLDS), 'critical')
+})
+
+test('decideCall：拒绝原因必须交代预占，否则读数与判定自相矛盾', () => {
+  const policy = { heavyTools: ['pwsh'], denyHeavyOnCritical: true }
+  const shifted = applyReserve(snap(2000, 8192), 1024)
+  const decision = decideCall({ grade: 'critical', toolName: 'pwsh', policy, snapshot: shifted })
+  assert.equal(decision.action, 'deny')
+  assert.match(decision.reason, /1024 MB 为轻活预占/)
+  assert.match(decision.reason, /原始可用物理 2000 MB/)
+})
+
+test('decideCall：没开预占时不说预占的事', () => {
+  const policy = { heavyTools: ['pwsh'], denyHeavyOnCritical: true }
+  const decision = decideCall({ grade: 'critical', toolName: 'pwsh', policy, snapshot: applyReserve(snap(800), 0) })
+  assert.equal(decision.action, 'deny')
+  assert.ok(!decision.reason.includes('预占'))
 })

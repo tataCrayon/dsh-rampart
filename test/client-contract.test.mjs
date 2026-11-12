@@ -117,6 +117,7 @@ test('读数是同源相对路径，不是宿主绝对地址', () => {
   const source = readFileSync(new URL('../client/source.js', import.meta.url), 'utf8')
   assert.ok(source.includes("new URL('rampart/api/stats', apiBase())"), '必须用相对路径拼路由')
   assert.ok(source.includes("new URL('rampart/api/gc', apiBase())"), 'GC 路由同样必须是相对路径')
+  assert.ok(source.includes("new URL('rampart/api/reserve', apiBase())"), '预占路由同样必须是相对路径')
   assert.ok(!/https?:\/\/127\.0\.0\.1/.test(source), '不允许硬编码宿主地址（会跨源被拦）')
 
   // 注释里提到 streamBaseUrl 是在解释「为什么不用它」，所以只查代码行
@@ -172,6 +173,22 @@ test('DSH 占用与整机用量画进同一根条，且 DSH 段不与「已用�
   assert.ok(source.includes('usedPhysMb - dshPhysMb'), '「其他已用」必须是已用减 DSH')
   // CPU：同理，DSH 忙不能超过整机忙
   assert.ok(source.includes('Math.min(busyPercent, tree?.treePercent ?? 0)'), 'DSH CPU 必须先夹进整机忙')
+})
+
+test('预占段从空闲里切出来，不混进「已用」（预占一个字节都没占用）', () => {
+  const exported = materialize()
+  assert.ok(exported.CSS.includes('.RGpill_tintReserve'), '预占段必须有独立色')
+
+  const source = readFileSync(new URL('../client/source.js', import.meta.url), 'utf8')
+  // 画「已用」必须用**原始**可用量：拿扣过预占的数去算已用，会把预占谎报成占用内存
+  assert.ok(source.includes('guard.availPhysMbRaw ?? guard.availPhysMb'), '已用/空闲必须按原始读数算')
+  assert.ok(source.includes('Math.min(guard.reserveMb ?? 0, freePhysMb)'), '预占段不能超出空闲段')
+  assert.ok(source.includes('freePhysMb - reserveMb'), '空闲段要减掉预占，否则总量会超出 100%')
+  // 面板要同时给出「重活可用」与「原始可用」，否则用户对不上任务管理器
+  assert.ok(source.includes("'guard.heavyFree'"), '必须有一行说明重活可用额度')
+  assert.ok(source.includes("'guard.heavyFreeValue'"), '重活可用额度要与原始值并列显示')
+  // 「整机可用提交内存」那一行同理：显示扣过预占的数会跟任务管理器对不上
+  assert.ok(source.includes('guard.availCommitMbRaw ?? guard.availCommitMb'), '可用提交也按原始读数显示')
 })
 
 test('读数条挪到上下文占用环右边（靠 CSS order，不是 slot order）', () => {
@@ -287,4 +304,51 @@ test('ensureStyles 在 HMR 后会用新内容替换旧样式标签，而不是�
     if (original.document === undefined) delete globalThis.document
     else globalThis.document = original.document
   }
+})
+
+test('预占调节走 POST /reserve，重置走 DELETE，且都受超时保护', async () => {
+  const exported = materialize()
+  assert.equal(typeof exported.requestReserve, 'function')
+  await withGlobals(async ({ setFetch, calls }) => {
+    setFetch(() => ({ ok: true, json: async () => ({ ok: true, reserveMb: 1536 }) }))
+    const saved = await exported.requestReserve(2048, 40)
+    // 客户端把「填的值」带回来：面板要据此判断是否被上限夹过。
+    assert.deepEqual(saved, { ok: true, reserveMb: 1536, requestedMb: 2048 })
+    assert.equal(calls[0].init.method, 'POST')
+    assert.deepEqual(JSON.parse(calls[0].init.body), { reserveMemoryMb: 2048 })
+    assert.ok(calls[0].url.endsWith('/rampart/api/reserve'))
+
+    await exported.requestReserve(undefined, 40)
+    assert.equal(calls[1].init.method, 'DELETE', '重置是 DELETE，不是 POST 0')
+    assert.equal(calls[1].init.body, undefined)
+  })
+})
+
+test('预占保存失败时返回失败对象（带状态码，界面才能说清是哪一层拦的）', async () => {
+  const exported = materialize()
+  await withGlobals(async ({ setFetch }) => {
+    setFetch(() => ({ ok: false, status: 405, json: async () => ({ ok: false, error: 'method-not-allowed' }) }))
+    const denied = await exported.requestReserve(1024, 40)
+    assert.equal(denied.ok, false)
+    assert.equal(denied.error, 'method-not-allowed')
+    assert.equal(denied.status, 405, '必须带状态码：面板要据此区分围栏 403 / 路由缺失 404 / 能力缺失 501')
+
+    setFetch(() => new Promise(() => {}))
+    const timedOut = await exported.requestReserve(1024, 40)
+    assert.equal(timedOut.ok, false, '超时也必须是失败对象，否则按钮永远停在「保存中」')
+    assert.match(timedOut.error, /abort|timeout/i)
+  })
+})
+
+test('失败文案不把底层措辞直接贴出来（「not found」会被误读成插件坏了）', async () => {
+  const exported = materialize()
+  // 桌面 shell 的 fallback 对未认领路径回的就是 "not found"；面板上照抄这句
+  // 会让用户以为插件坏了，真相是宿主没重载新代码。
+  assert.equal(typeof exported.describeFailure, 'function')
+  const notFound = exported.describeFailure({ ok: false, status: 404, error: 'not found' })
+  assert.ok(!/^not found$/.test(notFound), '不能原样回显')
+  assert.match(notFound, /宿主|旧代码|重载/)
+  assert.match(exported.describeFailure({ ok: false, status: 403, error: 'forbidden' }), /围栏/)
+  assert.match(exported.describeFailure({ ok: false, status: 501 }), /版本不支持/)
+  assert.equal(exported.describeFailure({ ok: false }), '未知错误')
 })

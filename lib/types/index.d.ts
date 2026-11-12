@@ -32,6 +32,21 @@ export interface GuardConfig {
   warnCommitMb: number
   /** 可用提交内存低于此值进入 critical；0 表示不检查。 */
   criticalCommitMb: number
+  /**
+   * 为轻活预占的内存额度（MB），默认 1024，0 表示关闭。
+   *
+   * 语义是**额度划拨**，不是真实占用：它从「重活准入」的读数里扣掉这么多可用量
+   * （`availPhysMb - reserveMemoryMb`），于是重活会在系统还剩这一块时就先被拦，
+   * 把最后一块留给 `read`/`grep`/`write`/汇报。进程本身一个字节都不多占，
+   * 因此永远可逆、也不会因为预占本身导致 OOM。
+   *
+   * 只影响 `gate()` 的重活判定与读数展示：`grade`/`rawGrade`（整机压力等级、
+   * 降优先级时机）仍按系统真实读数走。
+   *
+   * 这个字段是**基线**：面板上调整的值存在用户层（profile 目录下的
+   * `rampart.reserve.json`），优先级高于它；面板「重置」即回落到这里的值。
+   */
+  reserveMemoryMb: number
   /** 连续多少轮采样越线才升级。 */
   escalateSamples: number
   /** 连续多少轮采样回线才降级。 */

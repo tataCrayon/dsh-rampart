@@ -23,6 +23,7 @@ function config(overrides = {}) {
     criticalFreeMemoryMb: 1024,
     warnCommitMb: 3072,
     criticalCommitMb: 1536,
+    reserveMemoryMb: 0,
     escalateSamples: 1,
     recoverSamples: 1,
     sampleIntervalMs: 5000,
@@ -274,6 +275,151 @@ test('GradeTracker 与 Guardian 共用同一套迟滞参数', () => {
   const tracker = new GradeTracker({ escalateSamples: 4, recoverSamples: 5 })
   assert.equal(tracker.escalateSamples, 4)
   assert.equal(tracker.recoverSamples, 5)
+})
+
+test('预占：系统还够用时重活先被拦，但等级（降优先级时机）仍按真实读数', async () => {
+  // 可用 2600 MB：原始读数在 warn 线（2048）之上 → 等级 normal；
+  // 扣掉 1024 预占后剩 1576 MB → 重活视角 warn，本该「降速放行」的重活改为等一等。
+  const win32 = fakeWin32({ memory: { totalMb: 32768, availPhysMb: 2600, availCommitMb: 8192, loadPercent: 92 } })
+  const guardian = new ResourceGuardian({
+    config: config({ reserveMemoryMb: 1024, warnDelayMs: 0, priority: 'on-pressure' }),
+    env: {},
+  })
+  guardian.win32 = win32
+  await guardian.start()
+
+  assert.equal(guardian.state().grade, 'normal', '整机等级不该被预占抬高')
+  assert.equal(win32.state.priority, 0x20, '也就不会因为预占去降优先级')
+
+  const decision = await guardian.gate('pwsh')
+  assert.equal(decision.action, 'allow', 'warn 且 delay=0 只是放行前的等待省略')
+  assert.equal(guardian.state().heavyGrade, 'warn', '重活视角已经越线')
+})
+
+test('预占：重活视角能把 critical 提前到「原始读数还只是 warn」的时候', async () => {
+  const win32 = fakeWin32({ memory: { totalMb: 32768, availPhysMb: 2000, availCommitMb: 8192, loadPercent: 94 } })
+  const guardian = new ResourceGuardian({ config: config({ reserveMemoryMb: 1024 }), env: {} })
+  guardian.win32 = win32
+  await guardian.start()
+
+  assert.equal(guardian.state().grade, 'warn', '原始读数只是 warn')
+  const decision = await guardian.gate('pwsh')
+  assert.equal(decision.action, 'deny', '重活视角已 critical（2000-1024=976 < 1024）')
+  assert.match(decision.reason, /轻活预占/)
+})
+
+test('预占：轻工具不受重活视角影响，照常放行', async () => {
+  const win32 = fakeWin32({ memory: { totalMb: 32768, availPhysMb: 2000, availCommitMb: 8192, loadPercent: 94 } })
+  const guardian = new ResourceGuardian({ config: config({ reserveMemoryMb: 1024 }), env: {} })
+  guardian.win32 = win32
+  await guardian.start()
+  assert.equal((await guardian.gate('read')).action, 'allow')
+  assert.equal((await guardian.gate('write')).action, 'allow')
+})
+
+test('预占：两条迟滞链互不打断（后台 tick 与 gate 交替喂不同等级也能升级）', async () => {
+  // 这是最容易写错的地方：共用一个 tracker 时，后台每 5 秒喂一次原始等级、
+  // 每次 gate 再喂一次重活等级，两者的 pending 不同就会反复清零连击，
+  // 表现为「预占开着时 critical 永远不触发」。
+  const win32 = fakeWin32({ memory: { totalMb: 32768, availPhysMb: 2000, availCommitMb: 8192, loadPercent: 94 } })
+  const guardian = new ResourceGuardian({
+    config: config({ reserveMemoryMb: 1024, escalateSamples: 3, recoverSamples: 3 }),
+    env: {},
+  })
+  guardian.win32 = win32
+  await guardian.start()
+
+  for (let round = 0; round < 3; round += 1) {
+    guardian.tick() // 原始读数 warn：喂的是 normal→warn 那条链
+    await guardian.gate('read')
+  }
+  const decision = await guardian.gate('pwsh')
+  assert.equal(decision.action, 'deny', '连续 3 次重活视角 critical 后必须拦住')
+})
+
+test('预占：reserveMemoryMb=0 时行为与未加该选项前完全一致', async () => {
+  const win32 = fakeWin32({ memory: { totalMb: 32768, availPhysMb: 2000, availCommitMb: 8192, loadPercent: 94 } })
+  const guardian = new ResourceGuardian({ config: config({ reserveMemoryMb: 0 }), env: {} })
+  guardian.win32 = win32
+  await guardian.start()
+  assert.equal(guardian.state().grade, guardian.state().heavyGrade, '不开预占时两条链结果必须相同')
+  assert.equal(guardian.state().reserveMb, 0)
+  const shifted = guardian.state().heavySnapshot
+  assert.equal(shifted.availPhysMb, shifted.availPhysMbBeforeReserve)
+})
+
+test('setReserve：改了立刻生效，不等下一轮采样', async () => {
+  const win32 = fakeWin32({ memory: { totalMb: 32768, availPhysMb: 2400, availCommitMb: 8192, loadPercent: 93 } })
+  const guardian = new ResourceGuardian({ config: config({ reserveMemoryMb: 256 }), env: {} })
+  guardian.win32 = win32
+  await guardian.start()
+  assert.equal(guardian.state().heavySnapshot.availPhysMb, 2144)
+
+  // 面板是 2 秒轮询的：只改字段、等下一轮 tick 才重算的话，用户点完什么都看不见。
+  const applied = guardian.setReserve(1500)
+  assert.equal(applied, 1500)
+  assert.equal(guardian.state().heavySnapshot.availPhysMb, 900, '必须当场重算')
+  assert.equal(guardian.state().reserveMb, 1500)
+  assert.equal(guardian.state().grade, 'normal', '整机等级仍按原始读数（2400 > warn 2048），不被预占抬高')
+  assert.equal(guardian.state().baseReserveMb, 256, '基线要留着，重置时回落用')
+})
+
+test('setReserve：预占超过当前空闲时，生效值被夹住并把上限报出来', async () => {
+  // 空闲 1.7 GB 想预占 2 GB：多出来的部分是空气。旧行为是扣成 0，重活视角永远
+  // critical —— 用户看到「还有 1.7 GB 却调不动 pwsh」，只会去把预占关掉。
+  const win32 = fakeWin32({ memory: { totalMb: 32768, availPhysMb: 1700, availCommitMb: 8192, loadPercent: 95 } })
+  const guardian = new ResourceGuardian({ config: config({ reserveMemoryMb: 512 }), env: {} })
+  guardian.win32 = win32
+  await guardian.start()
+
+  guardian.setReserve(2048)
+  const state = guardian.state()
+  assert.equal(state.reserveCeilingMb, 1700, '上限就是当前空闲')
+  assert.equal(state.reserveMb, 1700, '生效值被夹到空闲')
+  assert.equal(state.reserveConfiguredMb, 2048, '填的值要留着，面板才能解释「为什么不是 2 GB」')
+  assert.equal(state.heavySnapshot.availPhysMb, 0, '夹到空闲后物理额度正好见底')
+  assert.equal(guardian.reserveCeiling(8192), 1700, '固定天花板比空闲大时仍取空闲')
+})
+
+test('setReserve：非法输入夹到 0，不留下 NaN', async () => {
+  const win32 = fakeWin32()
+  const guardian = new ResourceGuardian({ config: config({ reserveMemoryMb: 1024 }), env: {} })
+  guardian.win32 = win32
+  await guardian.start()
+  assert.equal(guardian.setReserve(Number.NaN), 0)
+  assert.equal(guardian.state().reserveMb, 0)
+  assert.equal(guardian.setReserve(-5), 0)
+})
+
+test('setReserve：调大预占能立刻把重活拦下（不需要重启/重载）', async () => {
+  const win32 = fakeWin32({ memory: { totalMb: 32768, availPhysMb: 2600, availCommitMb: 8192, loadPercent: 92 } })
+  const guardian = new ResourceGuardian({
+    config: config({ reserveMemoryMb: 0, criticalFreeMemoryMb: 1024 }),
+    env: {},
+  })
+  guardian.win32 = win32
+  await guardian.start()
+  assert.equal((await guardian.gate('pwsh')).action, 'allow', '不预占时系统还够用')
+
+  guardian.setReserve(1600) // 2600 − 1600 = 1000 < critical 1024
+  const decision = await guardian.gate('pwsh')
+  assert.equal(decision.action, 'deny')
+  assert.match(decision.reason, /轻活预占/)
+})
+
+test('setReserve：重置回基线后，重活重新放行', async () => {
+  const win32 = fakeWin32({ memory: { totalMb: 32768, availPhysMb: 2600, availCommitMb: 8192, loadPercent: 92 } })
+  const guardian = new ResourceGuardian({
+    config: config({ reserveMemoryMb: 0, criticalFreeMemoryMb: 1024 }),
+    env: {},
+  })
+  guardian.win32 = win32
+  await guardian.start()
+  guardian.setReserve(1600)
+  assert.equal((await guardian.gate('pwsh')).action, 'deny')
+
+  guardian.setReserve(guardian.baseReserveMb)
+  assert.equal((await guardian.gate('pwsh')).action, 'allow', '回落到基线后重活应当可用')
 })
 
 test('start 与 dispose 竞争：init 还没回来就被卸载，不得留下限制', async () => {

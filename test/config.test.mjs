@@ -97,3 +97,11 @@ test('DEFAULTS 是冻结的副本，改它不会污染后续校验', () => {
   }, TypeError)
   assert.equal(check({}).value.priority, 'on-pressure')
 })
+
+test('预占额度默认 1024 MB，0 表示关闭，负数被拒', () => {
+  assert.equal(check({}).value.reserveMemoryMb, 1024)
+  assert.equal(check({ reserveMemoryMb: 0 }).value.reserveMemoryMb, 0, '0 是「关闭」，必须被接受')
+  assert.equal(check({ reserveMemoryMb: 4096 }).value.reserveMemoryMb, 4096)
+  assert.ok(check({ reserveMemoryMb: -1 }).issues, '负数没有意义，应当拒绝')
+  assert.ok(check({ reserveMemoryMb: '1024' }).issues, '字符串不做隐式强转（与其它数值字段一致）')
+})

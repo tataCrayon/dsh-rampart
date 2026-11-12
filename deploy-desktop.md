@@ -51,6 +51,7 @@ warnFreeMemoryMb: 3000      # 可用物理 < 3.0 GB → warn（重活 +400ms）
 criticalFreeMemoryMb: 1800  # 可用物理 < 1.8 GB → critical（拦重活）
 warnCommitMb: 2200          # 可用提交 < 2.2 GB → warn
 criticalCommitMb: 1400      # 可用提交 < 1.4 GB → critical
+reserveMemoryMb: 1024       # 重活可用量 = 可用物理 − 1 GB；那 1 GB 留给轻活
 escalateSamples: 3          # 连续 3 次越线才升级（5s 一次 → 约 15s）
 recoverSamples: 3
 sampleIntervalMs: 5000
@@ -62,6 +63,15 @@ limitCores: 0               # 不钉核
 > （8 P + 8 E），低优先级线程被排到 E 核，CPU 密集的工具实测慢 **2~3 倍**
 > （单线程 ×3.18、真实子进程 ×2.27、4 并发 ×2.15）。没有内存压力时这笔钱是白付的。
 > 详见 `README.md` 的「一个真踩到的坑：below-normal 会让工具慢 2~3 倍」。
+
+### `reserveMemoryMb` 现在只是「基线」
+
+面板底部的滑杆改的是**用户层覆盖**（`<profile>/rampart.reserve.json`），优先级高于
+patch 里的这一行；面板「重置」= 删掉覆盖文件、回落到这里。
+
+所以调整预占**不必再改 patch**：点开底栏读数条 → 拖滑杆 → 「保存」，下一轮采样
+（≤5 秒）生效，不动 patch、不重启、不重建护栏。patch 里这一行留着，是为了给
+这个 profile 定一个统一基线（新机器、新 profile 上手就是它）。
 
 ### 为什么第一版阈值不对
 
@@ -161,8 +171,11 @@ Error: 资源护栏：pwsh 属于重活，当前内存压力为 critical（可�
 
 ## 6. 下次要调时
 
-改 `D:\Users\zigang.wang\.dsh\profiles\desktop\cordis.patch.yml` 里那条 insert 的
-`config`，保存即生效（约 2 秒）。**改完立刻看 `resource_guard` 的 `grade`**：
+**预占额度**：点底栏读数条 → 面板最底下的滑杆/数字框 → 「保存」。生效不用重启，
+也不用改 patch；「重置」回落到 patch 基线。
+
+**其它阈值**：改 `D:\Users\zigang.wang\.dsh\profiles\desktop\cordis.patch.yml` 里那条
+insert 的 `config`，保存即生效（约 2 秒）。**改完立刻看 `resource_guard` 的 `grade`**：
 
 - 长期 `warn` → 阈值压太紧，抬高或关掉 `warnDelayMs`
 - 从不 `critical` → 阈值太松，压到实测 min 附近

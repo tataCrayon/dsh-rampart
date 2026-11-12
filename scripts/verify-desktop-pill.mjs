@@ -52,6 +52,23 @@ function check(condition, message) {
 }
 
 /**
+ * 断言读数里的「预占」满足三条不变量：生效值 ≤ 上限，上限 ≤ 空闲，填写值不被涂改。
+ *
+ * 这三条是「预占上限是空闲」这个决定的可执行版本：只要它们成立，界面上就不可能
+ * 出现「填了 8 GB 而机器只有 1.7 GB」这种自相矛盾的读数。
+ * @param {object} stats `/stats` 的响应体。
+ * @param {string} label 出问题时的定位标签。
+ */
+function assertCeiling(stats, label) {
+  const guard = stats.guard ?? {}
+  const ceiling = guard.reserveCeilingMb
+  const applied = guard.reserveMb
+  const free = guard.availPhysMbRaw
+  check(typeof ceiling === 'number' && ceiling <= Math.max(0, free), `${label}：上限 ≤ 空闲（${ceiling} ≤ ${free}）`)
+  check(typeof applied === 'number' && applied <= Math.max(0, ceiling), `${label}：生效值 ≤ 上限（${applied} ≤ ${ceiling}）`)
+}
+
+/**
  * 让 OS 分配一个空闲端口。
  * @returns {Promise<number>} 端口号。
  */
@@ -200,6 +217,15 @@ try {
       `整树提交量有值（${stats.tree?.commitMb} MB）`,
     )
     check(stats.trustDegraded === false, '信任判定走的是 connection 服务（不是回环退化路径）')
+    // 预占要能一路走到浏览器：面板靠这两组数画出「空闲里切出来的一段」。
+    check(
+      stats.guard?.availPhysMb === Math.max(0, stats.guard?.availPhysMbRaw - stats.guard?.reserveMb),
+      `读数带预占拆分（重活 ${stats.guard?.availPhysMb} = 原始 ${stats.guard?.availPhysMbRaw} − ${stats.guard?.reserveMb}）`,
+    )
+    check(typeof stats.guard?.heavyGrade === 'string', `带重活视角等级（${stats.guard?.heavyGrade}）`)
+    // 面板要靠基线判断「当前值是不是面板调过的」，靠 persisted 判断「能不能重置」
+    check(typeof stats.guard?.baseReserveMb === 'number', `带 patch 基线（${stats.guard?.baseReserveMb} MB）`)
+    check(stats.guard?.reservePersisted === true, '预占可落盘（有 profile 目录）')
   }
 
   const gcResponse = await fetch(`${base}/rampart/api/gc`, { method: 'POST', headers: { cookie } })
@@ -210,9 +236,67 @@ try {
   const unknown = await fetch(`${base}/rampart/api/nope`, { headers: { cookie } })
   check(unknown.status === 404, `未知子路径 404（实际 ${unknown.status}）`)
 
-  // 6) 围栏：不带 cookie 必须 403，而不是 404 —— 404 说明路由根本没挂
+  // 6) 面板上调预占：POST 生效 → DELETE 重置回基线，全程不动 patch
+  const before = await (await fetch(`${base}/rampart/api/stats`, { headers: { cookie } })).json()
+  const baselineMb = before.guard?.baseReserveMb ?? 0
+  const freeMb = before.guard?.availPhysMbRaw ?? 0
+  // 目标值必须落在空闲之内：预占超过空闲会被夹住（这正是本次要验的行为之一）。
+  const targetMb = Math.max(64, Math.min(freeMb - 64, baselineMb === 512 ? 1024 : 512))
+  assertCeiling(before, `改值前`)
+  const saved = await fetch(`${base}/rampart/api/reserve`, {
+    method: 'POST',
+    headers: { cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ reserveMemoryMb: targetMb }),
+  })
+  const savedBody = await saved.json().catch(() => ({}))
+  check(saved.status === 200 && savedBody.reserveMb === targetMb, `POST /reserve 生效（${savedBody.reserveMb} MB）`)
+
+  const after = await (await fetch(`${base}/rampart/api/stats`, { headers: { cookie } })).json()
+  check(
+    after.guard?.reserveMb === targetMb &&
+      after.guard?.availPhysMb === Math.max(0, after.guard?.availPhysMbRaw - targetMb),
+    `改完读数立即跟上（重活 ${after.guard?.availPhysMb} = ${after.guard?.availPhysMbRaw} − ${targetMb}）`,
+  )
+
+  // 超过空闲的值必须被夹住：空闲 1.7 GB 填 8 GB 时，多出来的 6.3 GB 是空气。
+  const overshoot = await fetch(`${base}/rampart/api/reserve`, {
+    method: 'POST',
+    headers: { cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ reserveMemoryMb: 8192 }),
+  })
+  const overshootBody = await overshoot.json().catch(() => ({}))
+  const clamped = await (await fetch(`${base}/rampart/api/stats`, { headers: { cookie } })).json()
+  check(
+    overshootBody.ceilingMb > 0 && overshootBody.ceilingMb <= (clamped.guard?.availPhysMbRaw ?? 0),
+    `回显上限不超过当前空闲（上限 ${overshootBody.ceilingMb} MB，空闲 ${clamped.guard?.availPhysMbRaw} MB）`,
+  )
+  check(
+    clamped.guard?.reserveMb === clamped.guard?.availPhysMbRaw ||
+      clamped.guard?.reserveMb === overshootBody.ceilingMb,
+    `超限的额度被夹到上限（生效 ${clamped.guard?.reserveMb} MB，填的 8192 MB）`,
+  )
+  check(
+    clamped.guard?.reserveConfiguredMb === 8192,
+    `填的原值仍然保留（${clamped.guard?.reserveConfiguredMb} MB），空闲回升后能自动用满`,
+  )
+
+  const reset = await fetch(`${base}/rampart/api/reserve`, { method: 'DELETE', headers: { cookie } })
+  const resetBody = await reset.json().catch(() => ({}))
+  check(
+    reset.status === 200 && resetBody.reserveMb === baselineMb,
+    `DELETE /reserve 回落到基线（${resetBody.reserveMb} MB）`,
+  )
+
+  // 7) 围栏：不带 cookie 必须 403，而不是 404 —— 404 说明路由根本没挂
   const fenced = await fetch(`${base}/rampart/api/stats`)
   check(fenced.status === 403, `不带 cookie → ${fenced.status}（应当 403，围栏生效而不是路由缺失）`)
+
+  const fencedWrite = await fetch(`${base}/rampart/api/reserve`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ reserveMemoryMb: 1 }),
+  })
+  check(fencedWrite.status === 403, `不带 cookie 改预占 → ${fencedWrite.status}（应当 403）`)
 } finally {
   spawn('cmd', ['/c', `taskkill /T /F /PID ${child.pid}`], { stdio: 'ignore' })
   await new Promise((r) => setTimeout(r, 2500))

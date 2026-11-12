@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { ROUTE_PREFIX, TreeSampler, createStatsHandler } from '../lib/host-api.js'
+import { MAX_RESERVE_MB, ROUTE_PREFIX, TreeSampler, createStatsHandler } from '../lib/host-api.js'
 
 /**
  * 造一个能力集合，并记录被真实枚举了几次。
@@ -166,4 +166,136 @@ test('未知路径统一 404，且不影响合法路径', async () => {
   await handler()({ method: 'GET', url: `${ROUTE_PREFIX}/stats`, socket: {} }, ok.res)
   assert.equal(ok.read().status, 200)
   assert.equal(ok.read().body.ok, true)
+})
+
+// ── /reserve：面板上调预占额度 ───────────────────────────────────────────
+
+/**
+ * 造一个只带请求体的假 IncomingMessage。
+ *
+ * 路由用 `req.on('data'|'end'|'error')` 读 body，所以这里只要一个能同步吐出
+ * 片段的事件机就够了 —— 不需要真 socket，也就没有端口和清理问题。
+ * @param {string} text 请求体文本。
+ * @returns {object} 假请求。
+ */
+function bodyReq(text) {
+  const listeners = new Map()
+  const req = {
+    method: 'POST',
+    url: `${ROUTE_PREFIX}/reserve`,
+    socket: {},
+    on(event, fn) {
+      listeners.set(event, fn)
+      return req
+    },
+    destroy() {},
+  }
+  // 下一拍再发：路由是先挂监听、再 await 的，同步发会丢事件。
+  queueMicrotask(() => {
+    if (text.length > 0) listeners.get('data')?.(Buffer.from(text, 'utf8'))
+    listeners.get('end')?.()
+  })
+  return req
+}
+
+/**
+ * 造一个记账用的 setReserve / resetReserve。
+ * @param {number} [baseline] 重置回落的基线。
+ * @returns {object} 依赖与记账。
+ */
+function reserveSpies(baseline = 1024, ceiling = Number.POSITIVE_INFINITY) {
+  const calls = []
+  return {
+    calls,
+    setReserve: (mb) => {
+      calls.push(mb)
+      return mb
+    },
+    resetReserve: () => {
+      calls.push(`reset:${baseline}`)
+      return baseline
+    },
+    reserveCeiling: () => ceiling,
+  }
+}
+
+test('POST /reserve 改额度：传数字就生效，并回显实际值与上限', async () => {
+  const spies = reserveSpies()
+  const { res, read } = fakeRes()
+  await handler(spies)(bodyReq(JSON.stringify({ reserveMemoryMb: 2048 })), res)
+  assert.equal(read().status, 200)
+  assert.equal(read().body.reserveMb, 2048)
+  assert.equal(read().body.requestedMb, 2048)
+  assert.deepEqual(spies.calls, [2048])
+})
+
+test('POST /reserve 报出「当前空闲」这个上限，面板据此画出滑杆范围', async () => {
+  // 空闲只有 1700 MB 时，面板不该允许拖到 4 GB —— 那多出来的是空气。
+  const spies = reserveSpies(1024, 1700)
+  const { res, read } = fakeRes()
+  await handler(spies)(bodyReq(JSON.stringify({ reserveMemoryMb: 900 })), res)
+  assert.equal(read().body.ceilingMb, 1700)
+})
+
+test('POST /reserve 超过上限被夹住，不把重活视角永久压到 0', async () => {
+  // 手滑把 1024 打成 102400 时，重活额度会永久变成 0，护栏拦下一切重活，
+  // 看起来像「插件坏了」。夹到上限比接受这个值更接近用户本意。
+  const spies = reserveSpies()
+  const { res, read } = fakeRes()
+  await handler(spies)(bodyReq(JSON.stringify({ reserveMemoryMb: 102400 })), res)
+  assert.equal(read().body.reserveMb, MAX_RESERVE_MB)
+  assert.deepEqual(spies.calls, [MAX_RESERVE_MB])
+})
+
+test('POST /reserve 拒绝非法值：负数 / 字符串 / 缺字段都不落到护栏上', async () => {
+  for (const payload of ['{"reserveMemoryMb": -1}', '{"reserveMemoryMb": "1024"}', '{}']) {
+    const spies = reserveSpies()
+    const { res, read } = fakeRes()
+    await handler(spies)(bodyReq(payload), res)
+    assert.equal(read().status, 400, `应当拒绝 ${payload}`)
+    assert.deepEqual(spies.calls, [], '非法输入不能改到护栏')
+  }
+})
+
+test('POST /reserve 拒绝坏 JSON 与超大 body', async () => {
+  const spies = reserveSpies()
+  const bad = fakeRes()
+  await handler(spies)(bodyReq('not json'), bad.res)
+  assert.equal(bad.read().status, 500)
+  assert.deepEqual(spies.calls, [])
+
+  const huge = fakeRes()
+  await handler(spies)(bodyReq(`{"reserveMemoryMb":${'1'.repeat(9000)}}`), huge.res)
+  assert.equal(huge.read().status, 500, '超限 body 必须被拒，而不是先攒进内存')
+  assert.deepEqual(huge.calls ?? [], [])
+})
+
+test('DELETE /reserve 重置：回落到基线，且删除用户覆盖', async () => {
+  const spies = reserveSpies(1536)
+  const { res, read } = fakeRes()
+  await handler(spies)(
+    { method: 'DELETE', url: `${ROUTE_PREFIX}/reserve`, socket: {}, on() {}, destroy() {} },
+    res,
+  )
+  assert.equal(read().status, 200)
+  assert.equal(read().body.reserveMb, 1536)
+  assert.equal(read().body.reset, true)
+  assert.deepEqual(spies.calls, ['reset:1536'])
+})
+
+test('GET /reserve 被 405 挡住（跨站 <img> 不能改额度）', async () => {
+  const spies = reserveSpies()
+  const { res, read } = fakeRes()
+  await handler(spies)({ method: 'GET', url: `${ROUTE_PREFIX}/reserve`, socket: {} }, res)
+  assert.equal(read().status, 405)
+  assert.deepEqual(spies.calls, [])
+})
+
+test('没有 setReserve 能力时 /reserve 回 501，而不是假装成功', async () => {
+  const { res, read } = fakeRes()
+  await handler({ setReserve: undefined })(
+    { method: 'POST', url: `${ROUTE_PREFIX}/reserve`, socket: {}, on() {}, destroy() {} },
+    res,
+  )
+  assert.equal(read().status, 501)
 })

@@ -1,5 +1,17 @@
 # 市场投稿：已提交
 
+> ## 2026-11-12：0.3.0 需要再提一次 PR
+>
+> `tarball` 字段钉的是 `/releases/download/v0.3.0/dsh-rampart.tgz` 这条路径，
+> **发新版不会自动生效**。0.3.0（预占额度）上线后必须：
+>
+> 1. `npm pack` → `node scripts/release-tarball.mjs --create`（产出 v0.3.0 的资产，名字仍不带版本号）
+> 2. 改 `market/tataCrayon__dsh-rampart.yml` 的 `tarball` 到 v0.3.0（已改）、描述补预占（已改）
+> 3. **开新 PR**：旧的 #11542 已 merged，amend 分支不会重新触发审核；
+>    下文所有「不重开 PR」的论证都只针对那一个 PR，不适用于版本更新
+>
+> 下面 2026-11-03 / 11-04 的记录保持原样，是当时的事实。
+
 **PR：[awesome-dsh-plugin#11542](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/11542)**
 标题 `Add tataCrayon/dsh-rampart`，分支 `tataCrayon:add-dsh-rampart` → `awesome-dsh-plugin:main`，
 提交 `64c3507`，改动 1 个文件 `data/plugins/tataCrayon__dsh-rampart.yml`（+11 行）。

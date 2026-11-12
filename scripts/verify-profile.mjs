@@ -161,6 +161,14 @@ const payload = JSON.parse(readout.text)
 check(payload.grade === 'critical', `返回了压力等级（${payload.grade}，钉死阈值后必须是 critical）`)
 check(payload.deniedCalls >= 1, `计数被拦次数（${payload.deniedCalls}）`)
 check(payload.win32 === true, 'Win32 能力层可用（真读了系统内存）')
+// 预占上线后新增的两组数：必须同时给「重活额度」和「系统原始可用」。
+// 只给前者会让模型以为系统只剩这么点，只给后者会跟拒绝原因对不上账。
+check(
+  payload.availPhysMb === Math.max(0, payload.availPhysMbRaw - payload.reserveMb),
+  `重活可用量 = 原始可用 − 预占（${payload.availPhysMb} = ${payload.availPhysMbRaw} − ${payload.reserveMb}）`,
+)
+check(typeof payload.heavyGrade === 'string', `带重活视角等级（${payload.heavyGrade}）`)
+check(payload.reserveMb > 0, `预占额度取到了默认值（${payload.reserveMb} MB）`)
 
 console.log(`\n读数：${payload.summary}`)
 console.log(process.exitCode ? '\n结果：FAIL' : '\n结果：PASS — 插件在真实 profile 里拦住重活，且副作用未发生')

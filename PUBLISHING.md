@@ -46,9 +46,10 @@
 - [x] `LICENSE`（MIT）、`assets/icon-180.png`（市场卡片图标）、`assets/icon-1024.png`（宣传图）
 - [x] GitHub 仓库 `tataCrayon/dsh-rampart` 已建，`dsh-plugin` 等 topic 已打
 - [x] **代码已推到 master**，`c89453d2eaa38ed116dd7d5b3c1184bfa3d380c3`
-- [x] 93 条单测全绿（`npm test`）；`npm run verify` 四条全 PASS、
+- [x] 单测全绿（`npm test`，**0.3.0 起是 134 条**）；`npm run verify` 四条全 PASS、
       `verify:pill` 与 `verify:profile` 全 PASS
-- [x] `npm publish --dry-run` 通过：20 个文件、72.5 kB 包、192.9 kB 解包（不含 `.scratch/`）
+- [x] `npm publish --dry-run` 通过（**0.2.0 实测**：20 个文件、72.5 kB 包、192.9 kB 解包，
+      不含 `.scratch/`；0.3.0 多了 `lib/reserve-store.js`，文件数要重数）
 
 **还差两步**：发到 npm、提市场条目。下面逐步给命令。
 
@@ -160,7 +161,8 @@ npm test
 npm pack --dry-run              # 看一眼真的会打包哪些文件
 ```
 
-本次实测的 `npm pack --dry-run`：**20 个文件、72.5 kB 包 / 192.9 kB 解包**。
+本次实测（**0.2.0**）的 `npm pack --dry-run`：**20 个文件、72.5 kB 包 / 192.9 kB 解包**。
+0.3.0 的 `files` 多了一项 `lib/reserve-store.js`，打包数字要重新看一遍再说。
 
 `package.json` 的 `files` 已收敛：只带 `lib/`、`client/source.js`、`cordis.patch.yml`、
 启动壳的三个文件、`assets/icon-180.png`、`README.md`、`LICENSE`。
@@ -186,10 +188,10 @@ npm pack --dry-run              # 看一眼真的会打包哪些文件
 url: https://github.com/tataCrayon/dsh-rampart
 name: tataCrayon/dsh-rampart
 category: dev
-tarball: https://github.com/tataCrayon/dsh-rampart/releases/download/v0.2.0/dsh-rampart.tgz
+tarball: https://github.com/tataCrayon/dsh-rampart/releases/download/v0.3.0/dsh-rampart.tgz
 description:
-  en: 'Grades free physical and commit memory and refuses heavy tools (shell, workflow, subagent) before the machine thrashes. Also shows in the composer how much of the machine dsh itself is using, including whole-machine CPU.'
-  zh: '按可用物理内存与提交内存分级，到线就拦重活（shell、workflow、subagent）。并在输入框旁显示 DSH 自己占用了整机多少资源，含整机 CPU 占比。'
+  en: 'Grades free physical and commit memory and refuses heavy tools (shell, workflow, subagent) before the machine thrashes. A reserve you set on the panel is held back from heavy tools so light calls still have room. Also shows in the composer how much of the machine dsh itself is using, including whole-machine CPU.'
+  zh: '按可用物理内存与提交内存分级，到线就拦重活（shell、workflow、subagent）。可以在面板上划出一块预占额度，只留给轻活。并在输入框旁显示 DSH 自己占用了整机多少资源，含整机 CPU 占比。'
 icon: https://raw.githubusercontent.com/tataCrayon/dsh-rampart/master/assets/icon-180.png
 ```
 
@@ -198,9 +200,10 @@ icon: https://raw.githubusercontent.com/tataCrayon/dsh-rampart/master/assets/ico
 - `category` 取**实际做的事**：`dev`（开发与运行时）。不是 `ui`（UI 只是它的一半）。
 - 分支是 **`master`**，不是 `main`。两个 `icon` URL 都踩过：写 `main` 会 404
   （API 实测 `contents/assets/icon-180.png?ref=main` → 404，`?ref=master` → 1407 字节）。
-- `tarball` 的资产名**不要带版本号**，靠 `/releases/download/v0.2.0/` 这个路径钉版本。
+- `tarball` 的资产名**不要带版本号**，靠 `/releases/download/v0.3.0/` 这个路径钉版本。
   带版本号又挂在 `/releases/latest/` 下的写法，下次发版就 404 —— 市场脚本
   `probe-tarballs.mjs` 会专门把这种标成「会在下次发版时烂掉」。
+  **这条路径同时意味着：发新版不会自动生效，必须改这一行、提新 PR。**
 - 仓库需**创建满 1 天**（已于 2026-11-01 15:32 北京时间满足）、有真代码、带 `dsh-plugin` topic。
 - **描述必须与代码逐字对得上，审核真的会数。** 这里踩过一次：初稿写的是
   「Grades whole-machine memory **and CPU** pressure」，但 `gradeOf()` 只读四个
@@ -233,7 +236,7 @@ format-1 索引（放 GitHub Pages / jsDelivr / 任意 https 静态托管）：
       "repository": { "url": "https://github.com/tataCrayon/dsh-rampart" },
       "versions": [
         {
-          "version": "0.2.0",
+          "version": "0.3.0",
           "publishTimestamp": 1793491200,
           "source": {
             "type": "git",
@@ -308,7 +311,7 @@ cmd /c mklink /J "$profile\node_modules\dsh-rampart" "D:\Projects\MyProjects\dsh
 |---|---|
 | 只声明 `dsh.client`，没有 `dsh.bundle` | ✅ 两个都有 |
 | 没有 `cordis.patch.yml` | ✅ 有，且与包名一致 |
-| 占位仓库 / 纯 README | ✅ 有实现、有 93 条测试、有真机验收脚本 |
+| 占位仓库 / 纯 README | ✅ 有实现、有 134 条测试、有真机验收脚本 |
 | 仓库创建不满 1 天 | ✅ 2026-10-31 07:32:50Z 建，已满 1.97 天 |
 | 描述夸大 | ✅ 描述里的三件事都能在代码里指出来 |
 | 缺 `dsh-plugin` topic | ✅ 已打 |
