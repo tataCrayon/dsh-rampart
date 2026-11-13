@@ -191,6 +191,16 @@ test('预占段从空闲里切出来，不混进「已用」（预占一个字�
   assert.ok(source.includes('guard.availCommitMbRaw ?? guard.availCommitMb'), '可用提交也按原始读数显示')
 })
 
+// 面板必须把「重活会在空闲 ≤ X 时被停」这个数说出来。0.3.0 的 bug 正是这个数
+// 被当成「预占值」悄悄变成了 critical + 预占，用户可以填一个自己都不知道后果的值。
+test('预占面板说明里的拦截线来自宿主（heavyDenyBelowMb），不是自己算的', () => {
+  const source = readFileSync(new URL('../client/source.js', import.meta.url), 'utf8')
+  assert.ok(source.includes('guard.heavyDenyBelowMb ?? 0'), '拦截线必须取宿主给的数')
+  assert.ok(source.includes("'guard.reserveDenyBelow'"), '必须有一行说明「空闲 ≤ X 时停重活」')
+  // 基线字段名要与宿主返回的一致，否则「重置」提示会永远显示 0
+  assert.ok(source.includes('guard.baseReserveMb ?? 0'), 'baseReserveMb 必须与宿主 stats 字段对齐')
+})
+
 test('读数条挪到上下文占用环右边（靠 CSS order，不是 slot order）', () => {
   const exported = materialize()
   assert.ok(exported.CSS.includes('.RGpill_anchor{order:1'), '上下文环是 InputBar 硬编码在 dock 末尾的，只能用 CSS order 越过它')

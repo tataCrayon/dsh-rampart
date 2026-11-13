@@ -51,7 +51,7 @@ warnFreeMemoryMb: 3000      # 可用物理 < 3.0 GB → warn（重活 +400ms）
 criticalFreeMemoryMb: 1800  # 可用物理 < 1.8 GB → critical（拦重活）
 warnCommitMb: 2200          # 可用提交 < 2.2 GB → warn
 criticalCommitMb: 1400      # 可用提交 < 1.4 GB → critical
-reserveMemoryMb: 1024       # 重活可用量 = 可用物理 − 1 GB；那 1 GB 留给轻活
+reserveMemoryMb: 1024       # 预占线：重活拦截线 = max(critical 1800, 1024) = 1800
 escalateSamples: 3          # 连续 3 次越线才升级（5s 一次 → 约 15s）
 recoverSamples: 3
 sampleIntervalMs: 5000
@@ -63,6 +63,11 @@ limitCores: 0               # 不钉核
 > （8 P + 8 E），低优先级线程被排到 E 核，CPU 密集的工具实测慢 **2~3 倍**
 > （单线程 ×3.18、真实子进程 ×2.27、4 并发 ×2.15）。没有内存压力时这笔钱是白付的。
 > 详见 `README.md` 的「一个真踩到的坑：below-normal 会让工具慢 2~3 倍」。
+
+> **2026-11-12：这份配置曾经把机器锁死半小时。** 当时线画到 2262 MB，而 0.3.0 的判定是
+> 「可用物理 − 预占」去套 `criticalFreeMemoryMb`，拦截线变成 `1800 + 2262 = 4062 MB` ——
+> 空闲 3.5 GB 时 `git status` 都被拦。0.3.1 改成了 `max(critical, 预占)`，同一个配置下
+> 拦截线回到 1800 MB。**升级到 0.3.1 之前，不要把 `reserveMemoryMb` 设得比 critical 大。**
 
 ### `reserveMemoryMb` 现在只是「基线」
 
@@ -171,8 +176,9 @@ Error: 资源护栏：pwsh 属于重活，当前内存压力为 critical（可�
 
 ## 6. 下次要调时
 
-**预占额度**：点底栏读数条 → 面板最底下的滑杆/数字框 → 「保存」。生效不用重启，
-也不用改 patch；「重置」回落到 patch 基线。
+**预占线**：点底栏读数条 → 面板最底下的滑杆/数字框 → 「保存」。生效不用重启，
+也不用改 patch；「重置」回落到 patch 基线。面板会直接写出「重活会在空闲 ≤ X 时被停」，
+**看那个数，不要自己把预占和 critical 相加** —— 它们是取较大值，不是相加。
 
 **其它阈值**：改 `D:\Users\zigang.wang\.dsh\profiles\desktop\cordis.patch.yml` 里那条
 insert 的 `config`，保存即生效（约 2 秒）。**改完立刻看 `resource_guard` 的 `grade`**：

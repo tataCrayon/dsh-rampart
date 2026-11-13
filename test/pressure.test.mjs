@@ -14,6 +14,7 @@ import {
   applyReserve,
   decideCall,
   gradeOf,
+  heavyThresholds,
   isHeavyTool,
   normalizeSnapshot,
   reserveCeilingMb,
@@ -168,13 +169,18 @@ test('decideCall：轻工具在任何等级都不受影响', () => {
 
 // ── 预占额度（reserveMemoryMb）────────────────────────────────────────────
 
-test('applyReserve：可用量扣掉额度，原始值留在 *BeforeReserve 上', () => {
+test('applyReserve：读数展示「重活还能再吃多少」= 空闲 − 预占', () => {
   const shifted = applyReserve(snap(3000, 5000), 1024)
-  assert.equal(shifted.availPhysMb, 1976)
-  assert.equal(shifted.availCommitMb, 3976)
+  assert.equal(shifted.availPhysMb, 1976, '展示值 = 3000 − 1024')
   assert.equal(shifted.availPhysMbBeforeReserve, 3000, '原始读数必须留着，否则拒绝原因没法交代')
   assert.equal(shifted.availCommitMbBeforeReserve, 5000)
   assert.equal(shifted.reserveMb, 1024)
+})
+
+test('applyReserve：提交内存不受预占影响（它是另一个资源池）', () => {
+  // 早先一并扣提交量，导致「可用提交」凭空缩水，和任务管理器对不上账。
+  const shifted = applyReserve(snap(3000, 5000), 1024)
+  assert.equal(shifted.availCommitMb, 5000)
 })
 
 test('applyReserve：额度为 0 时是恒等变换（不改变判定结果）', () => {
@@ -185,53 +191,68 @@ test('applyReserve：额度为 0 时是恒等变换（不改变判定结果）',
   assert.equal(gradeOf(shifted, THRESHOLDS), gradeOf(base, THRESHOLDS))
 })
 
-test('applyReserve：额度超过当前空闲时被夹到空闲，而不是把重活额度归零', () => {
-  // 空闲 600 MB 却要预占 2048 MB：多出来的 1448 MB 是空气。旧实现会扣成 0，
-  // 于是重活视角永远 critical，用户看到的是「还有 600 MB 却什么都调不动」。
+test('applyReserve：额度超过当前空闲时被夹到空闲', () => {
+  // 空闲 600 MB 却要预占 2048 MB：多出来的 1448 MB 是空气。夹住而不是报 2048，
+  // 否则读数会显示一个机器上根本不存在的字数。
   const shifted = applyReserve(snap(600, 900), 2048)
   assert.equal(shifted.reserveMb, 600, '实际生效额度被夹到空闲')
   assert.equal(shifted.reserveConfiguredMb, 2048, '填进去的原值要留着，面板才能说清为什么不够')
-  assert.equal(shifted.availPhysMb, 0)
-  assert.equal(shifted.availCommitMb, 300, '提交量按夹后的 600 扣，而不是按 2048 扣成 0')
-  assert.equal(shifted.loadPercent, 100)
+  assert.equal(shifted.availPhysMb, 0, '夹到空闲后没有剩余')
+  assert.equal(shifted.availCommitMb, 900, '提交量不参与夹')
 })
 
-test('reserveCeilingMb：上限就是当前可用物理，再受固定天花板约束', () => {
-  assert.equal(reserveCeilingMb(snap(1700, 8192)), 1700)
-  assert.equal(reserveCeilingMb(snap(1700, 8192), 8192), 1700, '空闲比天花板小时取空闲')
-  assert.equal(reserveCeilingMb(snap(9000, 8192), 8192), 8192, '空闲比天花板大时取天花板')
+test('reserveCeilingMb：上限是当前空闲，再受固定天花板约束', () => {
+  // 线可以高过 critical（那正是它的用途），但不能高过当前空闲 —— 否则读数会显示一个
+  // 机器上根本不存在的数，且等价于宣布「此刻已经越线」。
+  assert.equal(reserveCeilingMb(snap(5000, 8192), 8192), 5000)
+  assert.equal(reserveCeilingMb(snap(5000, 8192), 2560), 2560, '固定天花板更小时取天花板')
+  assert.equal(reserveCeilingMb(snap(1700, 8192), 8192), 1700, '空闲更小时取空闲')
   // 总量读不到（非 Win32 / 能力层缺失）：没有可信空闲值，不能把上限压成 0，
   // 否则所有非 Windows 环境下「调大预占」都会失败。
   assert.equal(reserveCeilingMb(normalizeSnapshot({ availPhysMb: 0 }), 8192), 8192)
 })
 
-test('applyReserve：提交量未知（0）不能被减成「耗尽」', () => {
-  // commit=0 的含义是「这一项拿不到」。若直接减额度，0 会被夹成 0，
-  // 而 gradeOf 把 commit>0 当已知 —— 这条守着「未知不等于耗尽」。
-  const shifted = applyReserve(snap(3000, 0), 1024)
+test('applyReserve：提交量未知（0）不能被当成「耗尽」', () => {
+  // commit=0 的含义是「这一项拿不到」。减成 0 或比水位线都会把「未知」变成「耗尽」。
+  // 用一份空闲足够高的快照：那样物理这条线不会盖住提交这条线的结论。
+  const shifted = applyReserve(snap(9000, 0), 1024)
   assert.equal(shifted.availCommitMb, 0)
-  assert.equal(gradeOf(shifted, THRESHOLDS), 'warn', '只看物理：3000-1024=1976 < warn 2048')
+  assert.equal(gradeOf(shifted, THRESHOLDS), 'normal', '提交未知时只看物理：9000 高于两条线')
 })
 
-test('预占的意义：系统还够用时，重活先被拦下（把最后一块留给轻活）', () => {
-  // 原始 2600 MB 在 warn 阈值（2048）之上，本该放行；
-  // 扣掉 1024 后剩 1576 MB，已经越过 warn 线。
-  const base = snap(2600, 8192)
-  assert.equal(gradeOf(base, THRESHOLDS), 'normal')
-  assert.equal(gradeOf(applyReserve(base, 1024), THRESHOLDS), 'warn')
-
-  // 再紧一点：原始读数仍是 normal，重活视角已是 critical。
-  const tighter = snap(2000, 8192)
-  assert.equal(gradeOf(tighter, THRESHOLDS), 'warn')
-  assert.equal(gradeOf(applyReserve(tighter, 1024), THRESHOLDS), 'critical')
+test('heavyThresholds：拦截线取 max(critical, 预占)，不是相加', () => {
+  // 这是今天那个 bug 的正面断言。本机实配 critical 1800、预占 2262：
+  // 旧实现把「空闲 − 预占」喂给没变过的 critical，拦截线变成 1800 + 2262 = 4062 MB。
+  // 注意这里的 THRESHOLDS.criticalFreeMemoryMb 是 1024，所以用 1800 的配置来断言。
+  const real = { ...THRESHOLDS, criticalFreeMemoryMb: 1800 }
+  assert.equal(heavyThresholds(real, 2262).criticalFreeMemoryMb, 2262)
+  assert.equal(heavyThresholds(real, 1024).criticalFreeMemoryMb, 1800, '预占更小时以 critical 为准')
+  assert.equal(heavyThresholds(real, 0).criticalFreeMemoryMb, 1800, '不开预占时阈值原样')
+  // warn 线不动：预占只决定「什么时候停」，不该顺手改「什么时候降速」
+  assert.equal(heavyThresholds(real, 2262).warnFreeMemoryMb, real.warnFreeMemoryMb)
 })
 
-test('decideCall：拒绝原因必须交代预占，否则读数与判定自相矛盾', () => {
+test('预占的意义：把线画在预占上，机器还剩 4 GB 时照样放行重活', () => {
+  const real = { ...THRESHOLDS, criticalFreeMemoryMb: 1800, warnFreeMemoryMb: 3000 }
+  const heavyCfg = heavyThresholds(real, 2262)
+  // 4000/3000 在 warn 区间（>2262 且 <3000 的是 2400 与 2262 也都在线下），都不该 critical
+  for (const free of [4000, 3000, 2400, 2263]) {
+    assert.notEqual(gradeOf(snap(free, 8192), heavyCfg), 'critical', `空闲 ${free} MB 高于预占线，不该拦重活`)
+  }
+  assert.equal(gradeOf(snap(2262, 8192), heavyCfg), 'critical', '正好压线就拦（≤ 阈值）')
+  // critical 比预占线更保守时，最终由 critical 决定。
+  // 注意 warn 线：1900 在 warn(3000) 之下会是 warn —— 用的是「不 critical」而不是「normal」。
+  const tighter = heavyThresholds(real, 1024)
+  assert.notEqual(gradeOf(snap(1900, 8192), tighter), 'critical', '1900 高于 critical 1800，不该拦')
+  assert.equal(gradeOf(snap(1700, 8192), tighter), 'critical')
+})
+
+test('decideCall：拒绝原因必须交代预占线，否则读数与判定自相矛盾', () => {
   const policy = { heavyTools: ['pwsh'], denyHeavyOnCritical: true }
   const shifted = applyReserve(snap(2000, 8192), 1024)
   const decision = decideCall({ grade: 'critical', toolName: 'pwsh', policy, snapshot: shifted })
   assert.equal(decision.action, 'deny')
-  assert.match(decision.reason, /1024 MB 为轻活预占/)
+  assert.match(decision.reason, /预占线为 1024 MB/)
   assert.match(decision.reason, /原始可用物理 2000 MB/)
 })
 

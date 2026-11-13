@@ -188,10 +188,10 @@ npm pack --dry-run              # 看一眼真的会打包哪些文件
 url: https://github.com/tataCrayon/dsh-rampart
 name: tataCrayon/dsh-rampart
 category: dev
-tarball: https://github.com/tataCrayon/dsh-rampart/releases/download/v0.3.0/dsh-rampart.tgz
+tarball: https://github.com/tataCrayon/dsh-rampart/releases/download/v0.3.1/dsh-rampart.tgz
 description:
   en: 'Grades free physical and commit memory and refuses heavy tools (shell, workflow, subagent) before the machine thrashes. A reserve you set on the panel is held back from heavy tools so light calls still have room. Also shows in the composer how much of the machine dsh itself is using, including whole-machine CPU.'
-  zh: '按可用物理内存与提交内存分级，到线就拦重活（shell、workflow、subagent）。可以在面板上划出一块预占额度，只留给轻活。并在输入框旁显示 DSH 自己占用了整机多少资源，含整机 CPU 占比。'
+  zh: '按可用物理内存与提交内存分级，到线就拦重活（shell、workflow、subagent）。可以在面板上画一条预占线：重活不得把空闲用到这条线以下，这一块留给轻活。并在输入框旁显示 DSH 自己占用了整机多少资源，含整机 CPU 占比。'
 icon: https://raw.githubusercontent.com/tataCrayon/dsh-rampart/master/assets/icon-180.png
 ```
 
@@ -200,7 +200,7 @@ icon: https://raw.githubusercontent.com/tataCrayon/dsh-rampart/master/assets/ico
 - `category` 取**实际做的事**：`dev`（开发与运行时）。不是 `ui`（UI 只是它的一半）。
 - 分支是 **`master`**，不是 `main`。两个 `icon` URL 都踩过：写 `main` 会 404
   （API 实测 `contents/assets/icon-180.png?ref=main` → 404，`?ref=master` → 1407 字节）。
-- `tarball` 的资产名**不要带版本号**，靠 `/releases/download/v0.3.0/` 这个路径钉版本。
+- `tarball` 的资产名**不要带版本号**，靠 `/releases/download/v0.3.1/` 这个路径钉版本。
   带版本号又挂在 `/releases/latest/` 下的写法，下次发版就 404 —— 市场脚本
   `probe-tarballs.mjs` 会专门把这种标成「会在下次发版时烂掉」。
   **这条路径同时意味着：发新版不会自动生效，必须改这一行、提新 PR。**
@@ -236,7 +236,7 @@ format-1 索引（放 GitHub Pages / jsDelivr / 任意 https 静态托管）：
       "repository": { "url": "https://github.com/tataCrayon/dsh-rampart" },
       "versions": [
         {
-          "version": "0.3.0",
+          "version": "0.3.1",
           "publishTimestamp": 1793491200,
           "source": {
             "type": "git",

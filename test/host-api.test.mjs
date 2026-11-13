@@ -237,9 +237,19 @@ test('POST /reserve 报出「当前空闲」这个上限，面板据此画出滑
   assert.equal(read().body.ceilingMb, 1700)
 })
 
-test('POST /reserve 超过上限被夹住，不把重活视角永久压到 0', async () => {
-  // 手滑把 1024 打成 102400 时，重活额度会永久变成 0，护栏拦下一切重活，
-  // 看起来像「插件坏了」。夹到上限比接受这个值更接近用户本意。
+test('POST /reserve 的取值本身不被上限夹，只有固定天花板兜底', async () => {
+  // 线高过 critical 是正当用法（临时把停重活的水位抬到 3 GB），不该被「空闲 − critical」
+  // 这类推导拦下。这条守着 0.3.1 之前差点写错的那个上限。
+  const spies = reserveSpies(1024, 4096)
+  const { res, read } = fakeRes()
+  await handler(spies)(bodyReq(JSON.stringify({ reserveMemoryMb: 3000 })), res)
+  assert.equal(read().body.reserveMb, 3000, '3000 < 天花板，应原样生效')
+  assert.equal(read().body.ceilingMb, 4096, '上限只由当前空闲与固定天花板决定')
+})
+
+test('POST /reserve 超过上限被夹住，不把重活线永久抬到天上', async () => {
+  // 手滑把 1024 打成 102400 时，线会高过任何空闲，护栏拦下一切重活，
+  // 看起来像「插件坏了」。夹到固定天花板比接受这个值更接近用户本意。
   const spies = reserveSpies()
   const { res, read } = fakeRes()
   await handler(spies)(bodyReq(JSON.stringify({ reserveMemoryMb: 102400 })), res)

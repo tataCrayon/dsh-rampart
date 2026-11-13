@@ -10,7 +10,7 @@ CPU 占比只显示、不参与分级 —— `gradeOf()` 只看四个内存阈�
 
 | 层 | 干什么 | 在哪 |
 |---|---|---|
-| **插件**（软） | 采样可用内存 → 分 normal/warn/critical → 降优先级、钉核、拦重活、给模型读数据；并可划出一块**预占额度**只留给轻活 | `lib/` |
+| **插件**（软） | 采样可用内存 → 分 normal/warn/critical → 降优先级、钉核、拦重活、给模型读数据；并可画一条**预占线**，重活不得把空闲用到线下 | `lib/` |
 | **启动壳**（硬） | 给整棵 Electron 进程树套 Job Object 内存硬顶，撞上就被系统拒绝 | `scripts/launch.mjs` |
 
 外加**输入框下方的一条读数**（`CPU 12% · DSH 1.2 GB`），排在 DSH 自己的上下文占用环
@@ -19,7 +19,7 @@ CPU 占比只显示、不参与分级 —— `gradeOf()` 只看四个内存阈�
 数据不走模型，是浏览器直接打宿主路由取的本机读数。
 
 ```powershell
-dsh plugin --profile web add https://github.com/tataCrayon/dsh-rampart/releases/download/v0.3.0/dsh-rampart.tgz
+dsh plugin --profile web add https://github.com/tataCrayon/dsh-rampart/releases/download/v0.3.1/dsh-rampart.tgz
 ```
 
 > **还没发 npm，所以装法用 tarball URL，不要用 `add dsh-rampart`。**
@@ -114,7 +114,7 @@ node scripts\launch.mjs --cap 12000 --low-priority
 | `criticalFreeMemoryMb` | 1024 | 低于此值进入 critical（**拦**重活） |
 | `warnCommitMb` | 3072 | 可用提交内存低于此值进入 warn；`0` 关闭该项 |
 | `criticalCommitMb` | 1536 | 低于此值进入 critical；`0` 关闭该项 |
-| `reserveMemoryMb` | 1024 | **给轻活预占的额度**：重活可用量 = 可用物理 − 该值；`0` 关闭 |
+| `reserveMemoryMb` | 1024 | **给轻活留的水位线**：重活拦截线抬到 `max(criticalFreeMemoryMb, 该值)`；`0` 关闭 |
 | `priority` | `on-pressure` | 压力到 warn 才降优先级，解除即恢复；可选 `below-normal`（启动即降）/ `unchanged` |
 | `limitCores` | 0 | 钉住核数；0 = 不动亲和性 |
 | `heavyTools` | pwsh/bash/shell/workflow/subagent/subagent_fork/send_message/web_fetch/web_search | 精确名单 |
@@ -124,53 +124,61 @@ node scripts\launch.mjs --cap 12000 --low-priority
 
 ### 预占额度（`reserveMemoryMb`）
 
-**它不是一个字节都不许动的「内存池」，而是从重活额度里划走的一条线。**
+**它不是一个字节都不许动的「内存池」，而是一条水位线：重活不得把可用物理用到这条线以下。**
 
 要解决的真实问题很窄：**重活把最后一点内存吃光之后，模型连 `read`/`write`/汇报都做不了**。
-于是给重活看的可用量先扣掉 `reserveMemoryMb`：
+所以「重活能不能跑」看的是两个数里的**较大者**：
 
 ```
-重活可用物理 = min(可用物理 − 预占, 可用物理 − 可用物理)  ← 预占本身不超过可用物理
+重活拦截线 = max(criticalFreeMemoryMb, reserveMemoryMb)
 ```
 
-系统还有 2.6 GB、预占 1 GB 时，重活的视角只剩 1.6 GB —— 在这个水位它先被拦，
-而那 1 GB 留给轻活。**进程一个字节都不多占**，所以永远可逆、随时可调，
-也不会因为「预占」本身把机器顶到 OOM。
+系统还有 2.6 GB、线画在 2 GB 时，重活在 2.6 GB 照常放行；掉到 2 GB 才停，
+剩下的那 2 GB 留给轻活。线画 2262 MB、critical 是 1800 时，以 2262 为准；
+线画 1024 MB 时，以 critical 1800 为准。**两个参数不相加。**
 
-**预占不能超过当前可用物理内存**，这是它的物理上限。空闲只剩 1.7 GB 却要预占
-2 GB，那多出来的 0.3 GB 是空气；照扣的话重活额度直接归零，护栏就变成「无条件
-拦下一切重活」，用户看到的是「明明还有 1.7 GB，pwsh 却怎么都调不动」。
-所以生效值被夹住，同时把「填的值」与「上限」都报出来（见下面「怎么调」）。
+> **这里修过一个真事故（0.3.0 → 0.3.1）。** 0.3.0 把「可用物理 − 预占」当成重活读数，
+> 再拿去套**没变过的** `criticalFreeMemoryMb`，于是拦截线实际是 `1800 + 预占`。
+> 线画 2262 MB 时，机器还剩 **4 GB** 就把所有 `pwsh` 拦了，连 `git status` 都跑不动。
+> 更糟的是旋钮方向反了：预占本来是「我要给轻活留多少」，越往安全一侧拧可用性越差，
+> 最后只能关掉它。0.3.1 起判定改用上面的 `max`，`availPhysMb` 退化为**展示**用的
+> 「重活还能再吃多少」，而 `heavyDenyBelowMb` 才是真正的拦截线。
+
+**线的上限是当前可用物理内存。** 线画在 5 GB 而机器只有 3.5 GB，等于宣布「此刻重活
+已经越线」，读数还会显示一个根本不存在的数 —— 所以生效值被夹住，同时把「填的值」
+与「上限」都报出来（见下面「怎么调」）。另有 8192 MB 固定天花板防手滑多打一位数。
 
 三条边界必须说清：
 
 1. **不动系统内存。** 它不是 `VirtualAlloc` 垫付，任务管理器里看不到任何变化。
    要让 DSH 真的少占内存，得用启动壳的 Job 硬顶（见「装法」）。
-2. **只影响重活准入与读数展示。** `grade`/`rawGrade`（整机压力等级、降优先级时机）
-   仍按系统真实读数走。若等级也被预占抬高，底栏会长期报 warn，用户只会去调阈值
-   把它压掉 —— 那预占就白加了。
+2. **只抬高「重活 critical 线」。** `grade`/`rawGrade`（整机压力等级、降优先级时机）
+   仍按系统真实读数走，`warn` 线也不动。若整机等级也被预占抬高，底栏会长期报 warn，
+   用户只会去调阈值把它压掉 —— 那预占就白加了。
 3. **两条迟滞链各自独立。** 原始读数一条、重活读数一条（同一串采样，两份 `GradeTracker`）。
    共用一个 tracker 会互相清零连击：后台每 5 秒喂一次原始等级、每次 `gate` 再喂一次
    重活等级，只要两者不同级，`pending` 就被反复改写，`escalateSamples` 永远攒不满 ——
-   症状是「开了预占之后 critical 再也不触发」。`reserveMemoryMb: 0` 时两条链输入完全相同
-   （`applyReserve` 是恒等变换），行为与引入预占之前一致。
+   症状是「开了预占之后 critical 再也不触发」。`reserveMemoryMb: 0` 时两条链输入完全相同，
+   行为与引入预占之前一致。
 
-调参经验：**预占要比「轻活真正需要的那点」略大一点，但不要大到把重活永久锁死。**
-本机实测轻活（读文件、写待办、跑一次 GC）峰值不到 300 MB，默认 1 GB 留了三倍余量。
-如果装完发现 `deniedCalls` 在不该拦的时候涨，先把它调到 512 或 0 试一轮，
-再决定是改预占还是改阈值 —— 两者对判定的影响是同一个方向，容易互相背锅。
+调参经验：**线画在「轻活真正需要的那点」之上一点就够了，别再叠加 critical。**
+本机实测轻活（读文件、写待办、跑一次 GC）峰值不到 300 MB。如果装完发现 `deniedCalls`
+在不该拦的时候涨，先看 `heavyDenyBelowMb` 是多少 —— 它比预占值本身更能说明问题。
 
 #### 怎么调：面板上直接改，不用改配置
 
-点开底栏读数条，面板最下方就是**预占额度**：一个滑杆 + 一个数字框（精确到 MB）+
-「保存」「重置」。改完点「保存」，**下一轮采样（≤5 秒）就生效**，不需要重启、
-不需要改 patch、也不会重建护栏（迟滞状态与被拦计数都保留）。
+点开底栏读数条，面板最下方就是**预占线**：一个滑杆 + 一个数字框（精确到 MB）+
+「保存」「重置」，并直接写出当前 `重活会在空闲 ≤ X 时被停`。改完点「保存」，
+**下一轮采样（≤5 秒）就生效**，不需要重启、不需要改 patch、也不会重建护栏
+（迟滞状态与被拦计数都保留）。
 
 **上限就是你此刻的可用物理内存。** 面板会把当前值写成 `1.0 GB / 3.8 GB` 的样子，
-滑杆的刻度也跟着它走 —— 空闲 1.7 GB 时滑杆就到 1.7 GB 为止。理由很直白：
-预占是「从空闲里划出一块留给轻活」，空闲只有 1.7 GB 却预占 2 GB，那多出来的
-0.3 GB 是空气；照扣的话重活额度被夹到 0，护栏就变成「无条件拦下一切重活」，
-用户看到的是「明明还有 1.7 GB，pwsh 却怎么都调不动」，最后只能把预占关掉。
+滑杆的刻度也跟着它走 —— 空闲 1.7 GB 时滑杆就到 1.7 GB 为止。理由很直白：线画在
+1.7 GB 就是「现在就不许重活再吃」，这仍然是个合法选择；但画到 2 GB 就说不通了，
+那多出来的 0.3 GB 根本不存在。所以生效值被夹住，并把上限如实报出来。
+
+面板同时会写出 `重活会在空闲 ≤ X 时被停`（= `heavyDenyBelowMb`）。**这个数才是
+用户要判断的东西** —— 「预占填了 2 GB」本身不说明任何后果。
 
 两层配置是分开的，优先级从低到高：
 
@@ -187,7 +195,8 @@ node scripts\launch.mjs --cap 12000 --low-priority
 > 存下来的是 2 GB，只是**此刻按 1.7 GB 生效**；等机器空下来，它自动用满 2 GB。
 > 面板会明说「填的值超过当前空闲，实际按 X 生效」，不会让这个差额无声无息地消失。
 > 读数里因此有三组数：`reserveMb`（生效）、`reserveConfiguredMb`（填的）、
-> `reserveCeilingMb`（当前上限 = 空闲）。
+> `reserveCeilingMb`（当前上限 = 空闲），外加 `heavyDenyBelowMb`
+> （= `max(criticalFreeMemoryMb, reserveMb)`，真正决定「什么时候停」的那个数）。
 
 > **为什么覆盖值不写回 `cordis.patch.yml`**：那样要重排注释与缩进，还得跟 DSH 自己的
 > patch 写入抢同一个文件。一个护栏插件去改宿主的配置文件，出错面太大。独立一个
@@ -202,18 +211,18 @@ node scripts\launch.mjs --cap 12000 --low-priority
 `DELETE /rampart/api/reserve`（重置）。两者都走与读数同一道 `connection` 围栏，
 `GET` 一律 405 —— 否则一个跨站 `<img>` 就能改掉护栏的额度。
 
-还有一道固定天花板 8192 MB：手滑把 1024 打成 102400 会让重活额度永久归零，
+还有一道固定天花板 8192 MB：手滑把 1024 打成 102400 会让重活线永久高过空闲，
 护栏之后就拦下一切重活，看起来像坏了。真实上限取「固定天花板」与「当前空闲」的较小值。
 
 ### 分级依据（只有内存，没有 CPU）
 
-`gradeOf()` 只读上面四个内存阈值，**CPU 不参与任何判定**：
+`gradeOf()` 只读四个内存阈值，**CPU 不参与任何判定**：
 
 | 输入 | 参与分级？ | 用在哪 |
 |---|---|---|
 | 可用物理内存 | ✅ | `warnFreeMemoryMb` / `criticalFreeMemoryMb` |
 | 可用提交内存 | ✅ | `warnCommitMb` / `criticalCommitMb` |
-| 重活可用量（可用 − `reserveMemoryMb`） | ✅ | 只进「重活视角」那一套阈值与迟滞，见上节 |
+| 预占线 | ✅ | 只把**重活**的 critical 线抬到 `max(critical, reserve)`，见上节 |
 | 整机 CPU 占比 | ❌ | 只画进读数条与面板 |
 | DSH 进程树 CPU | ❌ | 只画进读数条与面板 |
 
@@ -241,33 +250,38 @@ node scripts\launch.mjs --cap 12000 --low-priority
 而不是一句「禁止」——后者会让模型反复重试同一条命令：
 
 ```
-资源护栏：pwsh 属于重活，当前内存压力为 critical（重活可用物理 783 MB / 总 32381 MB，
-占用 97%，可用提交 1530 MB，其中 1024 MB 为轻活预占（原始可用物理 1807 MB））。
+资源护栏：pwsh 属于重活，当前内存压力为 critical（可用物理 1807 MB / 总 32381 MB，
+占用 97%，可用提交 1530 MB，其中预占线为 2262 MB（重活不得用掉这一块，原始可用物理 1807 MB））。
 机器已接近卡死临界点，继续跑会拖垮整台机器。
 请改用轻量动作（read/grep/write/todo_write 等），或调用 resource_guard 查看实时读数后
 向用户汇报并等待。
 ```
 
-那段「其中 1024 MB 为轻活预占（原始可用物理 …）」是刻意的：没有它，模型看到
+那段「其中预占线为 2262 MB（原始可用物理 …）」是刻意的：没有它，模型看到
 「可用物理 1807 MB」却被告知 critical，只会以为护栏坏了然后重试。
 
-另有一个 `resource_guard` 工具。**两组数都给**：`availPhysMb` 是重活能用的额度
-（已扣预占），`availPhysMbRaw` 是系统真实可用：
+另有一个 `resource_guard` 工具。**两组数都给**：`availPhysMb` 是重活还能再吃多少
+（已扣预占），`availPhysMbRaw` 是系统真实可用；`heavyDenyBelowMb` 是真正决定拦不拦的
+那条线（= `max(critical, reserveMb)`）：
 
 ```json
 {
   "grade": "warn", "rawGrade": "warn", "heavyGrade": "critical",
-  "summary": "等级 warn（瞬时 warn）；重活可用物理 783 MB / 总量 32381 MB（占用 97%）（原始 1807 MB，预占 1024 MB 给轻活）；可用提交 1530 MB；已拦 2 次，降速 1 次，采样 9 次",
+  "summary": "等级 warn（瞬时 warn）；重活可用物理 783 MB / 总量 32381 MB（占用 97%）（原始 1807 MB，预占线 1024 MB）；可用提交 1530 MB；已拦 2 次，降速 1 次，采样 9 次",
   "totalMb": 32381,
   "availPhysMb": 783, "availPhysMbRaw": 1807,
   "availCommitMb": 1530, "availCommitMbRaw": 2554,
-  "reserveMb": 1024, "loadPercent": 94,
+  "reserveMb": 1024, "heavyDenyBelowMb": 1024, "loadPercent": 94,
   "deniedCalls": 2, "delayedCalls": 1, "samples": 9, "frozenPids": [], "win32": true
 }
 ```
 
 `grade` 是整机等级（`warn`），`heavyGrade` 是重活视角（`critical`）—— 这两个不一致
 正是预占在起作用：机器还没到卡死线，但重活已经该停了。
+
+> **别拿 `availPhysMb` 去跟 `criticalFreeMemoryMb` 比对。** 那是 0.3.0 的错误读法，
+> 也正是那个 bug 的来源。判断「现在该不该跑重活」只看等级，判断「什么时候会停」
+> 只看 `heavyDenyBelowMb`。
 
 ---
 
@@ -381,7 +395,7 @@ node scripts\launch.mjs --cap 12000 --low-priority
    得关掉占内存的程序；想限制 DSH 的内存天花板，得用启动壳的 Job 硬顶。
 7. **读数有 2 秒延迟。** 采样间隔默认 `statusPillIntervalMs: 2000`，且宿主侧满树采样本身要 20~30 ms
    （458 个进程的 Toolhelp 快照 23 ms）。
-8. **`reserveMemoryMb` 不改任何真实内存占用。** 它只是把「重活准入」的读数扣掉一块。
+8. **`reserveMemoryMb` 不改任何真实内存占用。** 它只是把「重活准入」的水位线抬高一块。
    想让 DSH 真的少占内存、或者让别人抢不走这块，得用启动壳的 Job 硬顶——
    那种「真实垫付」的实现（真提交并驻留 X MB，压力时再释放）会被系统换页、
    也会让 DSH 自己常年多吃一块，所以没有做，见上文「预占额度」。
@@ -390,16 +404,16 @@ node scripts\launch.mjs --cap 12000 --low-priority
 
 ## 实测证据
 
-### 单元 / 集成测试（134 条全绿）
+### 单元 / 集成测试（137 条全绿）
 
 ```powershell
 npm test
-# ℹ tests 134  ℹ pass 134  ℹ fail 0
+# ℹ tests 137  ℹ pass 137  ℹ fail 0
 ```
 
-覆盖：阈值分级、迟滞、重活判定、决策、配置校验、**预占额度（恒等变换 / 超空闲被夹住 /
-提交量未知不被减成耗尽 / 拒绝原因交代预占 / 两条迟滞链互不打断 / `setReserve` 当场生效 /
-上限 = 当前空闲且尊重固定天花板）**、
+覆盖：阈值分级、迟滞、重活判定、决策、配置校验、**预占线（拦截线取 max(critical, 预占) /
+不是相加 / 超空闲被夹住 / 提交量未知不被当成耗尽 / 拒绝原因交代预占线 / 两条迟滞链互不打断 /
+`setReserve` 当场生效 / 上限 = 当前空闲且尊重固定天花板）**、
 **预占用户层（原子写入 / 坏文件回落 / 无处可写不抛错）**、
 **`/reserve` 接口（改值 / 夹上限 / 回显上限 / 拒非法 / GET 405 / 无能力 501）**、
 优先级与亲和性的**可逆性**（含 `on-pressure` 下「无压力不发 syscall」「降了必恢复」）、
@@ -668,9 +682,10 @@ npm run verify:pill
 | 「其他已用」算出负数 | 蓝段溢出轨道 | DSH 的提交量可能**大于**整机已用物理（换页 / 共享页）。必须先把 DSH 夹进「整机已用」，再算「其他 = 已用 − DSH」 |
 | 验收脚本「全 PASS 却退出码 1」 | PowerShell 把 stderr 当失败 | `spawnSync(cmd, args, { shell: true })` 会发 DEP0190 警告到 stderr。改成把整条命令行交给 ComSpec、参数数组留空 |
 | 门禁验收**随机**通过或失败 | 机器空闲时等级是 normal | 阈值跟着本机实测内存走，护栏就不触发。**验收的输入要钉死**：设成不可能达到的值，`critical` 才是确定状态 |
-| 开了预占之后 `critical` 再也不触发 | 明明一直越线，等级停在 warn | 两条读数（原始 / 扣预占）共用了一个 `GradeTracker`：后台 tick 喂原始等级、gate 喂重活等级，两者不同级就把 `pending` 反复改写，连击永远攒不满。**两条链必须各自一份**，且都跟着同一串采样推进 |
-| 面板上「可用内存」跟任务管理器对不上 | 以为预占真占了内存 | 预占是**额度**不是占用。所以面板「已用/空闲」按 `availPhysMbRaw` 算，预占单独画成从空闲里切出的橙色段，并由 `reserveMemoryMb: 0` 可一键关掉 |
-| 预占填得比空闲还大 | 重活永远调不动，只能把预占关掉 | 多出来的部分不存在。旧实现硬扣后夹成 0 → 重活视角恒为 critical。现在生效值被夹到当前空闲，并同时报「填的值 / 上限」，空闲回升后自动用满 |
+| 开了预占之后 `critical` 再也不触发 | 明明一直越线，等级停在 warn | 两条读数（原始 / 重活）共用了一个 `GradeTracker`：后台 tick 喂原始等级、gate 喂重活等级，两者不同级就把 `pending` 反复改写，连击永远攒不满。**两条链必须各自一份**，且都跟着同一串采样推进 |
+| 面板上「可用内存」跟任务管理器对不上 | 以为预占真占了内存 | 预占是**线**不是占用。所以面板「已用/空闲」按 `availPhysMbRaw` 算，预占单独画成从空闲里切出的橙色段，并由 `reserveMemoryMb: 0` 可一键关掉 |
+| 预占填得比空闲还大 | 重活永远调不动，只能把预占关掉 | 多出来的部分不存在。生效值被夹到当前空闲，并同时报「填的值 / 上限」，空闲回升后自动用满 |
+| **预占设成 2.2 GB，机器还剩 4 GB 却什么都跑不动**（0.3.0 的事故） | `git status` 都被拦，日志说 critical 但任务管理器显示内存充足 | 「可用物理 − 预占」被拿去套了**没变过的** `criticalFreeMemoryMb`，拦截线实际是 `1800 + 2262 = 4062 MB`。0.3.1 起改成 `max(critical, 预占)`，并且**展示值不再当判定值用**（判定读原始快照 + 抬高后的阈值）；读数里新增 `heavyDenyBelowMb` 指明真正的线 |
 | 面板上「保存失败：not found」 | 看起来像插件坏了 | `not found` 是宿主 webserver 的 **fallback** 文案：说明请求没走到我们的路由（宿主还在跑没这条路由的旧代码）。现在失败文案带状态码并按层解释（403 围栏 / 404 路由缺失 / 501 能力缺失 / 405 方法），不再原样回显底层措辞 |
 
 ---
@@ -678,7 +693,7 @@ npm run verify:pill
 ## 目录
 
 ```
-lib/pressure.js    纯逻辑：分级、迟滞、预占额度（applyReserve）、重活判定、决策（无副作用，可单测）
+lib/pressure.js    纯逻辑：分级、迟滞、预占线（applyReserve / heavyThresholds）、重活判定、决策（无副作用，可单测）
 lib/guardian.js    运行时：采样、装/撤可逆限制、门禁（两条迟滞链：原始 / 重活视角）
 lib/win32.js       Win32 能力层：内存读数、优先级、亲和性、冻结、Job
 lib/config.js      StandardSchemaV1 配置校验
@@ -699,7 +714,7 @@ scripts/soak.mjs   可靠性浸泡（泄漏、并发门禁、迟滞抖动、disp
 scripts/preview-panel.mjs 用无头 Chrome 把面板截成图（验观感，不跑 DSH）
 scripts/*-probe.js 只在 .verify profile 里挂载的探针
 scripts/probe-*.cjs 一次性诊断探针（错误码、偏移量），留着是因为它们是那些教训的证据
-test/              134 条（pressure 28 / tree-stats 16 / guardian 29 / config 12 / host-api 17 / reserve-store 10 / integration 5 / client 契约 17）
+test/              137 条（pressure 30 / tree-stats 16 / guardian 29 / config 12 / host-api 17 / reserve-store 10 / integration 5 / client 契约 18）
 ```
 
 发布相关的信息（命名取舍、npm/GitHub/市场三处各要什么、格式 1 索引示例）见

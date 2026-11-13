@@ -1,16 +1,32 @@
 # 市场投稿：已提交
 
-> ## 2026-11-12：0.3.0 需要再提一次 PR
+> ## 2026-11-13：0.3.0 的预占语义是错的，PR #14631 等 0.3.1 一起进
 >
-> `tarball` 字段钉的是 `/releases/download/v0.3.0/dsh-rampart.tgz` 这条路径，
-> **发新版不会自动生效**。0.3.0（预占额度）上线后必须：
+> 0.3.0 把「可用物理 − 预占」当成重活读数，再拿去套没变过的 `criticalFreeMemoryMb`，
+> 于是拦截线实际是 `critical + 预占`：本机 critical 1800 + 预占 2262 = **4062 MB**，
+> 机器还剩 4 GB 就拦下所有 `pwsh`，`git status` 都跑不动，持续了半小时。
 >
-> 1. `npm pack` → `node scripts/release-tarball.mjs --create`（产出 v0.3.0 的资产，名字仍不带版本号）
-> 2. 改 `market/tataCrayon__dsh-rampart.yml` 的 `tarball` 到 v0.3.0（已改）、描述补预占（已改）
-> 3. **开新 PR**：旧的 #11542 已 merged，amend 分支不会重新触发审核；
->    下文所有「不重开 PR」的论证都只针对那一个 PR，不适用于版本更新
+> 0.3.1 改成 `max(critical, 预占)`。**PR #14631 不合并，等 0.3.1 的 tarball 出来后
+> 把同一分支的 `tarball` 指到 v0.3.1、补一段说明**，这样少一次审核往返。
+> 站点上现在指的 v0.3.0 资产仍然可下载，不会 404。
 >
-> 下面 2026-11-03 / 11-04 的记录保持原样，是当时的事实。
+> ## 2026-11-12：0.3.0 的更新 PR 已开（#14631）
+>
+> | 步骤 | 状态 |
+> |---|---|
+> | 代码提交并推送 | ✅ `82cc2cd`，`master` = `origin/master` |
+> | 本地 tag | ✅ `v0.3.0`（轻量 tag，与远端 `refs/tags/v0.3.0` 同一个提交） |
+> | Release 资产 | ✅ `releases/download/v0.3.0/dsh-rampart.tgz`，96752 B，SHA256 `60d4987d…8768f`，与本地 `npm pack` 逐字节一致 |
+> | 市场条目 | ✅ `market/tataCrayon__dsh-rampart.yml` 已改（tarball + 描述），等于 fork 分支上的内容 |
+> | 新 PR | ✅ [#14631](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/14631)，`tataCrayon:bump-dsh-rampart-0.3.0` → `main`，1 个文件 +3/−3，`mergeable: true` |
+>
+> 分支**从 upstream main 新建**，不是在 `add-dsh-rampart` 上叠提交 —— 旧分支的提交已经在
+> main 上，再叠会让 diff 带上无关历史。fork 的 main 之前落后 upstream 一个提交，
+> 已用 `merge-upstream` 快进同步（否则新分支的 base 不是最新 main）。
+>
+> 下面 2026-11-03 / 11-04 的记录保持原样，是当时的事实。**「不重开 PR」的论证只针对
+> #11542**：那次是首次投稿，重开要把排队的 291 个 PR 作废重排；版本更新是另一件事，
+> 必须开新 PR，因为 tarball 路径钉了 tag，发新版不会自动生效。
 
 **PR：[awesome-dsh-plugin#11542](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/11542)**
 标题 `Add tataCrayon/dsh-rampart`，分支 `tataCrayon:add-dsh-rampart` → `awesome-dsh-plugin:main`，
